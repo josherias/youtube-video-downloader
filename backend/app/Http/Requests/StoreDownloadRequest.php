@@ -17,6 +17,8 @@ class StoreDownloadRequest extends FormRequest
         return [
             'url' => ['required', 'url', 'max:2048'],
             'quality' => ['sometimes', Rule::in(['best', '1080', '720', '480'])],
+            'format' => ['sometimes', Rule::in(['mp4', 'webm', 'mp3', 'm4a'])],
+            'codec' => ['sometimes', Rule::in(['compatible', 'best'])],
             'audio_only' => ['sometimes', 'boolean'],
             'title' => ['sometimes', 'nullable', 'string', 'max:500'],
             'channel' => ['sometimes', 'nullable', 'string', 'max:255'],

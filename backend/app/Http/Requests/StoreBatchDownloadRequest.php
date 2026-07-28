@@ -18,6 +18,8 @@ class StoreBatchDownloadRequest extends FormRequest
 
         return [
             'quality' => ['sometimes', Rule::in(['best', '1080', '720', '480'])],
+            'format' => ['sometimes', Rule::in(['mp4', 'webm', 'mp3', 'm4a'])],
+            'codec' => ['sometimes', Rule::in(['compatible', 'best'])],
             'audio_only' => ['sometimes', 'boolean'],
             'items' => ['required', 'array', 'min:1', 'max:'.$max],
             'items.*.url' => ['required', 'url', 'max:2048'],

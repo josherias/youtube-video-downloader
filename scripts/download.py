@@ -55,72 +55,133 @@ def has_ffmpeg() -> bool:
         return False
 
 
-def _video_format(quality: str, *, prefer_mp4: bool) -> str:
+def _height_filter(quality: str) -> str:
     height = {"1080": 1080, "720": 720, "480": 480}.get(quality)
-    h = f"[height<={height}]" if height else ""
-
-    if prefer_mp4:
-        return (
-            f"bv*[ext=mp4][vcodec^=avc1]{h}+ba[ext=m4a]/"
-            f"bv*[ext=mp4]{h}+ba[ext=m4a]/"
-            f"b[ext=mp4]{h}/"
-            f"bv*{h}+ba/b{h}/b"
-        )
-
-    return (
-        f"best[ext=mp4][acodec!=none][vcodec!=none]{h}/"
-        f"best[acodec!=none][vcodec!=none]{h}/"
-        f"best[acodec!=none][vcodec!=none]/best"
-    )
+    return f"[height<={height}]" if height else ""
 
 
-def build_opts(
-    outdir: Path,
-    audio_only: bool,
-    quality: str,
-    progress_file: Path | None = None,
-) -> dict:
-    outdir.mkdir(parents=True, exist_ok=True)
+def _audio_opts(outdir: Path, container: str, codec: str) -> dict:
+    outtmpl = str(outdir / "%(title)s [%(id)s].%(ext)s")
+    preferred = "mp3" if container == "mp3" else "m4a"
     ffmpeg = has_ffmpeg()
 
-    if audio_only:
-        outtmpl = str(outdir / "%(title)s [%(id)s].%(ext)s")
-        opts: dict = {
-            "format": "bestaudio/best",
+    if codec == "compatible" and container == "m4a":
+        fmt = "bestaudio[ext=m4a]/bestaudio/best"
+    elif codec == "compatible" and container == "mp3":
+        fmt = "bestaudio/best"
+    else:
+        fmt = "bestaudio/best"
+
+    opts: dict = {
+        "format": fmt,
+        "outtmpl": outtmpl,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    if ffmpeg:
+        opts["postprocessors"] = [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": preferred,
+                "preferredquality": "192",
+            }
+        ]
+    return opts
+
+
+def _video_opts(outdir: Path, quality: str, container: str, codec: str) -> dict:
+    h = _height_filter(quality)
+    ffmpeg = has_ffmpeg()
+    outtmpl = str(outdir / "%(title)s [%(id)s].%(ext)s")
+
+    if not ffmpeg:
+        # Single-file fallback when merge is unavailable.
+        if container == "webm":
+            fmt = (
+                f"best[ext=webm][acodec!=none][vcodec!=none]{h}/"
+                f"best[acodec!=none][vcodec!=none]{h}/best"
+            )
+        else:
+            fmt = (
+                f"best[ext=mp4][acodec!=none][vcodec!=none]{h}/"
+                f"best[acodec!=none][vcodec!=none]{h}/best"
+            )
+        return {
+            "format": fmt,
             "outtmpl": outtmpl,
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
         }
-        if ffmpeg:
-            opts["postprocessors"] = [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ]
-    elif ffmpeg:
-        opts = {
-            "format": _video_format(quality, prefer_mp4=True),
-            "format_sort": ["res", "vcodec:h264", "acodec:aac", "ext:mp4:m4a"],
-            "outtmpl": str(outdir / "%(title)s [%(id)s].%(ext)s"),
-            "merge_output_format": "mp4",
+
+    if container == "webm":
+        if codec == "compatible":
+            fmt = (
+                f"bv*[ext=webm][vcodec^=vp9]{h}+ba[ext=webm]/"
+                f"bv*[ext=webm]{h}+ba/"
+                f"b[ext=webm]{h}/"
+                f"bv*{h}+ba/b{h}/b"
+            )
+            sort = ["res", "vcodec:vp9", "acodec:opus", "ext:webm"]
+        else:
+            fmt = f"bv*{h}+ba/b{h}/b"
+            sort = ["res", "ext:webm"]
+        return {
+            "format": fmt,
+            "format_sort": sort,
+            "outtmpl": outtmpl,
+            "merge_output_format": "webm",
             "postprocessors": [
-                {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
+                {"key": "FFmpegVideoRemuxer", "preferedformat": "webm"},
             ],
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
         }
+
+    # MP4
+    if codec == "compatible":
+        fmt = (
+            f"bv*[ext=mp4][vcodec^=avc1]{h}+ba[ext=m4a]/"
+            f"bv*[ext=mp4]{h}+ba[ext=m4a]/"
+            f"b[ext=mp4]{h}/"
+            f"bv*{h}+ba/b{h}/b"
+        )
+        sort = ["res", "vcodec:h264", "acodec:aac", "ext:mp4:m4a"]
     else:
-        opts = {
-            "format": _video_format(quality, prefer_mp4=False),
-            "outtmpl": str(outdir / "%(title)s [%(id)s].%(ext)s"),
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
+        fmt = f"bv*{h}+ba/b{h}/b"
+        sort = ["res", "ext:mp4:m4a"]
+
+    return {
+        "format": fmt,
+        "format_sort": sort,
+        "outtmpl": outtmpl,
+        "merge_output_format": "mp4",
+        "postprocessors": [
+            {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
+        ],
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+
+def build_opts(
+    outdir: Path,
+    quality: str,
+    container: str = "mp4",
+    codec: str = "compatible",
+    progress_file: Path | None = None,
+) -> dict:
+    outdir.mkdir(parents=True, exist_ok=True)
+    container = (container or "mp4").lower()
+    codec = (codec or "compatible").lower()
+
+    if container in {"mp3", "m4a"}:
+        opts = _audio_opts(outdir, container, codec)
+    else:
+        opts = _video_opts(outdir, quality, container, codec)
 
     if progress_file is not None:
         opts["progress_hooks"] = [_make_progress_hook(progress_file)]
@@ -311,15 +372,18 @@ def _format_duration(seconds: int | float | None) -> str | None:
 def download(
     url: str,
     outdir: Path,
-    audio_only: bool,
     quality: str,
+    container: str = "mp4",
+    codec: str = "compatible",
     progress_file: Path | None = None,
 ) -> Path | None:
     ensure_ffmpeg_libs()
     if progress_file is not None:
         _write_progress(progress_file, {"status": "starting", "percent": 0})
 
-    opts = build_opts(outdir, audio_only, quality, progress_file)
+    opts = build_opts(outdir, quality, container, codec, progress_file)
+    audio_container = container in {"mp3", "m4a"}
+
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         if not info:
@@ -329,12 +393,12 @@ def download(
             path = Path(requested[0]["filepath"])
         else:
             filename = ydl.prepare_filename(info)
-            if audio_only and has_ffmpeg():
-                filename = str(Path(filename).with_suffix(".mp3"))
-            elif info.get("ext") and not audio_only:
+            if audio_container and has_ffmpeg():
+                filename = str(Path(filename).with_suffix(f".{container}"))
+            elif info.get("ext") and not audio_container:
                 filename = str(Path(filename).with_suffix(f".{info['ext']}"))
             path = Path(filename)
-            if not audio_only and opts.get("merge_output_format"):
+            if not audio_container and opts.get("merge_output_format"):
                 merged = path.with_suffix(f".{opts['merge_output_format']}")
                 if merged.exists():
                     path = merged
@@ -372,10 +436,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Max video quality (default: best)",
     )
     parser.add_argument(
+        "-f",
+        "--format",
+        choices=["mp4", "webm", "mp3", "m4a"],
+        default="mp4",
+        help="Output format/container (default: mp4)",
+    )
+    parser.add_argument(
+        "--codec",
+        choices=["compatible", "best"],
+        default="compatible",
+        help="Codec preference: compatible (widely playable) or best quality",
+    )
+    parser.add_argument(
         "-a",
         "--audio-only",
         action="store_true",
-        help="Download audio only (MP3 if ffmpeg is installed)",
+        help="Deprecated: same as --format mp3",
     )
     parser.add_argument(
         "--info",
@@ -407,6 +484,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     ensure_ffmpeg_libs()
 
+    container = args.format
+    if args.audio_only and container == "mp4":
+        container = "mp3"
+
     try:
         if args.info:
             print(json.dumps(fetch_info(args.url, max_entries=args.max_entries)))
@@ -415,8 +496,9 @@ def main(argv: list[str] | None = None) -> int:
         path = download(
             args.url,
             args.output,
-            args.audio_only,
             args.quality,
+            container,
+            args.codec,
             args.progress_file,
         )
     except DownloadError as exc:

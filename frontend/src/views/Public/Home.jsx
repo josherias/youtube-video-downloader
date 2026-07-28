@@ -7,7 +7,6 @@ import {
   Form,
   Input,
   Progress,
-  Switch,
 } from "antd";
 import toast from "react-hot-toast";
 import {
@@ -25,6 +24,18 @@ const QUALITY_OPTIONS = [
   { label: "1080p", value: "1080" },
   { label: "720p", value: "720" },
   { label: "480p", value: "480" },
+];
+
+const FORMAT_OPTIONS = [
+  { label: "MP4", value: "mp4" },
+  { label: "WebM", value: "webm" },
+  { label: "MP3", value: "mp3" },
+  { label: "M4A", value: "m4a" },
+];
+
+const CODEC_OPTIONS = [
+  { label: "Compatible", value: "compatible" },
+  { label: "Best quality", value: "best" },
 ];
 
 const antTheme = {
@@ -75,18 +86,30 @@ export default function Home() {
   const [batch, setBatch] = useState(null);
   const [error, setError] = useState("");
   const [quality, setQuality] = useState("best");
+  const [format, setFormat] = useState("mp4");
+  const [codec, setCodec] = useState("compatible");
   const pollRef = useRef(null);
 
-  const audioOnly = Form.useWatch("audio_only", form);
   const urlValue = Form.useWatch("url", form);
   const isPlaylist = preview?.type === "playlist";
+  const isAudioFormat = format === "mp3" || format === "m4a";
 
   const helper = useMemo(() => {
-    if (audioOnly) {
-      return "Exports audio as MP3 when ffmpeg is available on the server.";
+    if (format === "mp3") {
+      return "Audio-only MP3 export.";
     }
-    return "Exports an MP4 with audio — H.264 + AAC when available.";
-  }, [audioOnly]);
+    if (format === "m4a") {
+      return "Audio-only M4A/AAC export.";
+    }
+    if (format === "webm") {
+      return codec === "compatible"
+        ? "WebM with VP9 + Opus when available."
+        : "Best available streams remuxed into WebM.";
+    }
+    return codec === "compatible"
+      ? "MP4 with H.264 + AAC for widest playback support."
+      : "Best available streams remuxed into MP4.";
+  }, [format, codec]);
 
   const activeWork =
     job?.status === "queued" ||
@@ -235,7 +258,8 @@ export default function Home() {
         const response = await createBatchDownload({
           items: selectedEntries,
           quality: quality || "best",
-          audioOnly: Boolean(values.audio_only),
+          format,
+          codec,
         });
 
         const payload = response?.data;
@@ -258,7 +282,8 @@ export default function Home() {
       const response = await createDownload({
         url: values.url.trim(),
         quality: quality || "best",
-        audioOnly: Boolean(values.audio_only),
+        format,
+        codec,
         preview,
       });
 
@@ -325,7 +350,6 @@ export default function Home() {
             form={form}
             layout="vertical"
             requiredMark={false}
-            initialValues={{ audio_only: false }}
             onFinish={onFinish}
           >
             <Form.Item
@@ -375,6 +399,56 @@ export default function Home() {
 
             <div className="mb-5">
               <label className="mb-2 block text-sm font-medium text-ink-soft">
+                Format
+              </label>
+              <div className="quality-group" role="radiogroup" aria-label="Format">
+                {FORMAT_OPTIONS.map((option) => {
+                  const active = format === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`quality-btn ${active ? "is-active" : ""}`}
+                      disabled={isBusy}
+                      aria-pressed={active}
+                      onClick={() => setFormat(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <label className="mb-2 block text-sm font-medium text-ink-soft">
+                Codec
+              </label>
+              <div
+                className="option-group-2"
+                role="radiogroup"
+                aria-label="Codec"
+              >
+                {CODEC_OPTIONS.map((option) => {
+                  const active = codec === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`quality-btn ${active ? "is-active" : ""}`}
+                      disabled={isBusy}
+                      aria-pressed={active}
+                      onClick={() => setCodec(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <label className="mb-2 block text-sm font-medium text-ink-soft">
                 Quality
               </label>
               <div className="quality-group" role="radiogroup" aria-label="Quality">
@@ -385,7 +459,7 @@ export default function Home() {
                       key={option.value}
                       type="button"
                       className={`quality-btn ${active ? "is-active" : ""}`}
-                      disabled={Boolean(audioOnly) || isBusy}
+                      disabled={isAudioFormat || isBusy}
                       aria-pressed={active}
                       onClick={() => setQuality(option.value)}
                     >
@@ -394,16 +468,6 @@ export default function Home() {
                   );
                 })}
               </div>
-            </div>
-
-            <div className="mb-2 flex items-center justify-between rounded-xl border border-line bg-panel/70 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-ink">Audio only</p>
-                <p className="text-xs text-muted">Skip video, keep the track</p>
-              </div>
-              <Form.Item name="audio_only" valuePropName="checked" className="!mb-0">
-                <Switch className="tg-switch" disabled={isBusy} />
-              </Form.Item>
             </div>
 
             <p className="mb-2 text-xs leading-relaxed text-muted">{helper}</p>

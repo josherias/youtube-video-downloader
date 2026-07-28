@@ -53,8 +53,8 @@ yarn dev               # http://localhost:5173
 ## API
 
 - `POST /api/preview` — `{ "url": "..." }` → video or playlist metadata
-- `POST /api/downloads` — queue a single video
-- `POST /api/downloads/batch` — `{ "items": [{ "url": "..." }], "quality": "720", "audio_only": false }`
+- `POST /api/downloads` — queue a single video (`format`: mp4|webm|mp3|m4a, `codec`: compatible|best)
+- `POST /api/downloads/batch` — `{ "items": [{ "url": "..." }], "quality": "720", "format": "mp4", "codec": "compatible" }`
 - `GET /api/batches/{id}` — batch status + per-video progress
 - `GET /api/downloads/{id}` — single job status + progress
 - `GET /api/downloads/{id}/file` — download a ready file

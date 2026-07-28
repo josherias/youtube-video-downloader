@@ -13,7 +13,8 @@ export async function previewVideo(url) {
 export async function createDownload({
   url,
   quality = "best",
-  audioOnly = false,
+  format = "mp4",
+  codec = "compatible",
   preview = null,
 }) {
   const { data } = await axiosClient.post(
@@ -21,7 +22,8 @@ export async function createDownload({
     {
       url,
       quality,
-      audio_only: audioOnly,
+      format,
+      codec,
       ...(preview
         ? {
             title: preview.title,
@@ -40,13 +42,15 @@ export async function createDownload({
 export async function createBatchDownload({
   items,
   quality = "best",
-  audioOnly = false,
+  format = "mp4",
+  codec = "compatible",
 }) {
   const { data } = await axiosClient.post(
     "/downloads/batch",
     {
       quality,
-      audio_only: audioOnly,
+      format,
+      codec,
       items: items.map((item) => ({
         url: item.webpage_url || item.url,
         title: item.title,

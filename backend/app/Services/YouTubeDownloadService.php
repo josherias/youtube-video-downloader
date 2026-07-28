@@ -49,12 +49,22 @@ class YouTubeDownloadService
     public function queue(
         string $url,
         string $quality = 'best',
-        bool $audioOnly = false,
+        string $format = 'mp4',
+        string $codec = 'compatible',
         ?array $preview = null,
         ?string $batchId = null,
         ?int $batchIndex = null,
     ): DownloadJob {
         $this->assertYouTubeUrl($url);
+
+        $format = strtolower($format);
+        $codec = strtolower($codec);
+        if (! in_array($format, ['mp4', 'webm', 'mp3', 'm4a'], true)) {
+            $format = 'mp4';
+        }
+        if (! in_array($codec, ['compatible', 'best'], true)) {
+            $codec = 'compatible';
+        }
 
         $job = DownloadJob::query()->create([
             'id' => (string) Str::uuid(),
@@ -62,7 +72,9 @@ class YouTubeDownloadService
             'batch_index' => $batchIndex,
             'url' => $url,
             'quality' => $quality,
-            'audio_only' => $audioOnly,
+            'format' => $format,
+            'codec' => $codec,
+            'audio_only' => in_array($format, ['mp3', 'm4a'], true),
             'status' => 'queued',
             'progress' => 0,
             'title' => $preview['title'] ?? null,
@@ -81,8 +93,12 @@ class YouTubeDownloadService
      * @param  array<int, array<string, mixed>>  $items
      * @return array{batch_id: string, jobs: list<DownloadJob>}
      */
-    public function queueBatch(array $items, string $quality = 'best', bool $audioOnly = false): array
-    {
+    public function queueBatch(
+        array $items,
+        string $quality = 'best',
+        string $format = 'mp4',
+        string $codec = 'compatible',
+    ): array {
         $max = (int) config('downloader.max_batch_size', 25);
         if ($items === []) {
             throw new RuntimeException('Select at least one video to download.');
@@ -113,7 +129,8 @@ class YouTubeDownloadService
             $jobs[] = $this->queue(
                 $url,
                 $quality,
-                $audioOnly,
+                $format,
+                $codec,
                 $preview !== [] ? $preview : null,
                 $batchId,
                 $index,
@@ -210,16 +227,16 @@ class YouTubeDownloadService
             '-o',
             $outdir,
             '-q',
-            $job->quality,
+            $job->quality ?: 'best',
+            '-f',
+            $job->format ?: 'mp4',
+            '--codec',
+            $job->codec ?: 'compatible',
             '--progress-file',
             $progressFile,
             '--result-file',
             $resultFile,
         ];
-
-        if ($job->audio_only) {
-            $command[] = '-a';
-        }
 
         $process = Process::timeout((int) config('downloader.timeout', 600))
             ->env($this->processEnv())

@@ -50,7 +50,8 @@ class DownloadController extends ApiController
             $job = $this->downloads->queue(
                 $validated['url'],
                 $validated['quality'] ?? 'best',
-                (bool) ($validated['audio_only'] ?? false),
+                $this->resolveFormat($validated),
+                $validated['codec'] ?? 'compatible',
                 $preview !== [] ? $preview : null,
             );
 
@@ -76,7 +77,8 @@ class DownloadController extends ApiController
             $result = $this->downloads->queueBatch(
                 $validated['items'],
                 $validated['quality'] ?? 'best',
-                (bool) ($validated['audio_only'] ?? false),
+                $this->resolveFormat($validated),
+                $validated['codec'] ?? 'compatible',
             );
 
             foreach ($result['jobs'] as $job) {
@@ -154,5 +156,22 @@ class DownloadController extends ApiController
                 'Access-Control-Expose-Headers' => 'Content-Disposition',
             ])
             ->deleteFileAfterSend(false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function resolveFormat(array $validated): string
+    {
+        if (! empty($validated['format'])) {
+            return (string) $validated['format'];
+        }
+
+        // Backward compatibility with older clients.
+        if (! empty($validated['audio_only'])) {
+            return 'mp3';
+        }
+
+        return 'mp4';
     }
 }
