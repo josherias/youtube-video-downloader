@@ -1,8 +1,27 @@
+# Root
 .venv/
-downloads/
 __pycache__/
 *.pyc
+downloads/
 *.mp4
 *.mp3
 *.webm
 *.mkv
+.DS_Store
+
+# Backend
+backend/vendor/
+backend/node_modules/
+backend/.env
+backend/storage/app/downloads/
+backend/storage/logs/
+backend/storage/framework/cache/
+backend/storage/framework/sessions/
+backend/storage/framework/views/
+backend/bootstrap/cache/*.php
+backend/database/*.sqlite
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
