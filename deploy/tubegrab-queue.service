@@ -1,0 +1,19 @@
+[Unit]
+Description=TubeGrab queue worker
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Restart=always
+RestartSec=3
+WorkingDirectory=/var/www/tubegrab/backend
+ExecStart=/usr/bin/php artisan queue:work --sleep=1 --tries=1 --timeout=660 --max-time=3600
+Nice=5
+
+# Make ffmpeg find system BLAS/LAPACK if needed on Debian/Ubuntu
+Environment=LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/blas:/usr/lib/x86_64-linux-gnu/lapack
+
+[Install]
+WantedBy=multi-user.target

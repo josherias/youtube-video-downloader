@@ -1,0 +1,66 @@
+name: Deploy to Contabo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy via SSH
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -e
+
+            echo "Pulling latest code..."
+            cd /var/www/tubegrab
+            git fetch origin main
+            git checkout main
+            git pull origin main
+
+            echo "Installing Python download helpers..."
+            python3 -m pip install --user -r scripts/requirements.txt
+
+            echo "Installing Laravel dependencies..."
+            cd backend
+            # Prefer the deploy user, not root (Composer warns against root installs)
+            composer install --no-dev --optimize-autoloader --no-interaction
+
+            echo "Preparing storage..."
+            php artisan storage:link || true
+            mkdir -p storage/app/downloads storage/logs storage/framework/{cache,sessions,views}
+            chmod -R ug+rwx storage bootstrap/cache
+
+            echo "Running migrations..."
+            php artisan migrate --force
+
+            echo "Seeding admin user (idempotent)..."
+            php artisan db:seed --force --class=AdminUserSeeder
+
+            echo "Clearing & caching config..."
+            php artisan config:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            echo "Restarting queue workers..."
+            php artisan queue:restart
+
+            echo "Building React frontend..."
+            cd ../frontend
+            yarn install --frozen-lockfile || yarn install
+            yarn build
+
+            echo "Deployment complete!"

@@ -1,0 +1,45 @@
+# TubeGrab nginx vhost (SPA + Laravel API on one domain)
+#
+# 1. Copy to /etc/nginx/sites-available/tubegrab
+# 2. Replace tubegrab.example.com and the phpX.Y-fpm socket
+# 3. sudo ln -s /etc/nginx/sites-available/tubegrab /etc/nginx/sites-enabled/
+# 4. sudo nginx -t && sudo systemctl reload nginx
+# 5. sudo certbot --nginx -d tubegrab.example.com
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name tubegrab.example.com;
+
+    client_max_body_size 32M;
+
+    root /var/www/tubegrab/frontend/dist;
+    index index.html;
+
+    # All API traffic → Laravel front controller (keeps /api prefix for routing)
+    location /api {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/tubegrab/backend/public/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+        fastcgi_read_timeout 660s;
+    }
+
+    # Laravel health endpoint
+    location = /up {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME /var/www/tubegrab/backend/public/index.php;
+        fastcgi_param SCRIPT_NAME /index.php;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
+        expires 7d;
+        add_header Cache-Control "public";
+        try_files $uri =404;
+    }
+}

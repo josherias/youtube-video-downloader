@@ -74,3 +74,31 @@ yarn dev               # http://localhost:5173
 
 Playlist previews are capped by `DOWNLOADER_MAX_PLAYLIST_ENTRIES` (default 50).
 Batch size is capped by `DOWNLOADER_MAX_BATCH_SIZE` (default 25).
+
+## Deploy (VPS / Contabo + GitHub Actions)
+
+Same pattern as wifispot: SSH deploy on push to `main`, app at `/var/www/tubegrab`, secrets stay in server `.env`.
+
+### GitHub secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `SSH_HOST` | VPS host |
+| `SSH_USER` | Deploy user |
+| `SSH_PRIVATE_KEY` | SSH private key |
+| `SSH_PORT` | Usually `22` |
+
+Workflow: [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+
+### First-time server setup
+
+See **[deploy/SERVER_SETUP.md](deploy/SERVER_SETUP.md)** for:
+
+- Packages (`php-fpm`, `nginx`, `ffmpeg`, Python/`yt-dlp`)
+- Clone to `/var/www/tubegrab`
+- Production `.env` + admin seed
+- Frontend `VITE_API_BASE_URL=https://your-domain`
+- Nginx example: [`deploy/nginx.tubegrab.conf.example`](deploy/nginx.tubegrab.conf.example)
+- Queue worker systemd unit: [`deploy/tubegrab-queue.service`](deploy/tubegrab-queue.service) (**required** — downloads won’t run without it)
+
+After setup, merge/push to `main` to deploy.
