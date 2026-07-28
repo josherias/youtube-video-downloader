@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Download a YouTube video from a URL."""
+"""Download a YouTube video from a URL, or print metadata."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -15,7 +16,6 @@ from yt_dlp.utils import DownloadError
 
 DEFAULT_OUTDIR = Path("downloads")
 
-# Debian alternatives can point at missing atlas libs; real libs live here.
 _EXTRA_LIB_DIRS = (
     Path("/usr/lib/x86_64-linux-gnu/blas"),
     Path("/usr/lib/x86_64-linux-gnu/lapack"),
@@ -23,7 +23,6 @@ _EXTRA_LIB_DIRS = (
 
 
 def ensure_ffmpeg_libs() -> None:
-    """Make ffmpeg find BLAS/LAPACK when system alternatives are broken."""
     current = os.environ.get("LD_LIBRARY_PATH", "")
     parts = [p for p in current.split(":") if p]
     changed = False
@@ -42,7 +41,6 @@ def has_ffmpeg() -> bool:
     ensure_ffmpeg_libs()
     if not shutil.which("ffmpeg"):
         return False
-    # Confirm ffmpeg actually starts (shared libs can be broken).
     import subprocess
 
     try:
@@ -58,12 +56,10 @@ def has_ffmpeg() -> bool:
 
 
 def _video_format(quality: str, *, prefer_mp4: bool) -> str:
-    """Build a yt-dlp format string that prefers MP4 and always includes audio."""
     height = {"1080": 1080, "720": 720, "480": 480}.get(quality)
     h = f"[height<={height}]" if height else ""
 
     if prefer_mp4:
-        # Prefer H.264/AAC in MP4, then any MP4/M4A pair, then any mergeable streams.
         return (
             f"bv*[ext=mp4][vcodec^=avc1]{h}+ba[ext=m4a]/"
             f"bv*[ext=mp4]{h}+ba[ext=m4a]/"
@@ -71,7 +67,6 @@ def _video_format(quality: str, *, prefer_mp4: bool) -> str:
             f"bv*{h}+ba/b{h}/b"
         )
 
-    # Progressive muxed file only (no ffmpeg) — prefer MP4.
     return (
         f"best[ext=mp4][acodec!=none][vcodec!=none]{h}/"
         f"best[acodec!=none][vcodec!=none]{h}/"
@@ -79,7 +74,12 @@ def _video_format(quality: str, *, prefer_mp4: bool) -> str:
     )
 
 
-def build_opts(outdir: Path, audio_only: bool, quality: str) -> dict:
+def build_opts(
+    outdir: Path,
+    audio_only: bool,
+    quality: str,
+    progress_file: Path | None = None,
+) -> dict:
     outdir.mkdir(parents=True, exist_ok=True)
     ffmpeg = has_ffmpeg()
 
@@ -89,6 +89,8 @@ def build_opts(outdir: Path, audio_only: bool, quality: str) -> dict:
             "format": "bestaudio/best",
             "outtmpl": outtmpl,
             "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
         }
         if ffmpeg:
             opts["postprocessors"] = [
@@ -98,52 +100,166 @@ def build_opts(outdir: Path, audio_only: bool, quality: str) -> dict:
                     "preferredquality": "192",
                 }
             ]
-        return opts
-
-    # %(ext)s is required for multi-stream downloads; final file is always remuxed to mp4.
-    outtmpl = str(outdir / "%(title)s [%(id)s].%(ext)s")
-
-    if ffmpeg:
-        return {
+    elif ffmpeg:
+        opts = {
             "format": _video_format(quality, prefer_mp4=True),
             "format_sort": ["res", "vcodec:h264", "acodec:aac", "ext:mp4:m4a"],
-            "outtmpl": outtmpl,
+            "outtmpl": str(outdir / "%(title)s [%(id)s].%(ext)s"),
             "merge_output_format": "mp4",
             "postprocessors": [
                 {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
             ],
             "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+        }
+    else:
+        opts = {
+            "format": _video_format(quality, prefer_mp4=False),
+            "outtmpl": str(outdir / "%(title)s [%(id)s].%(ext)s"),
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
         }
 
-    return {
-        "format": _video_format(quality, prefer_mp4=False),
-        "outtmpl": outtmpl,
+    if progress_file is not None:
+        opts["progress_hooks"] = [_make_progress_hook(progress_file)]
+
+    return opts
+
+
+def _write_progress(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _make_progress_hook(progress_file: Path):
+    def hook(d: dict) -> None:
+        status = d.get("status")
+        if status == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes") or 0
+            percent = 0.0
+            if total:
+                percent = min(99.0, round(downloaded * 100 / total, 1))
+            elif d.get("_percent_str"):
+                try:
+                    percent = float(str(d["_percent_str"]).replace("%", "").strip())
+                except ValueError:
+                    percent = 0.0
+            _write_progress(
+                progress_file,
+                {
+                    "status": "downloading",
+                    "percent": percent,
+                    "downloaded_bytes": downloaded,
+                    "total_bytes": total or None,
+                    "speed": d.get("speed"),
+                    "eta": d.get("eta"),
+                },
+            )
+        elif status == "finished":
+            _write_progress(
+                progress_file,
+                {
+                    "status": "processing",
+                    "percent": 99.0,
+                    "downloaded_bytes": d.get("downloaded_bytes"),
+                    "total_bytes": d.get("total_bytes"),
+                },
+            )
+
+    return hook
+
+
+def fetch_info(url: str) -> dict:
+    ensure_ffmpeg_libs()
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
         "noplaylist": True,
+    }
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        raise RuntimeError("Could not fetch video metadata.")
+
+    thumbnails = info.get("thumbnails") or []
+    thumbnail = info.get("thumbnail")
+    if not thumbnail and thumbnails:
+        thumbnail = thumbnails[-1].get("url")
+
+    duration = info.get("duration")
+    return {
+        "id": info.get("id"),
+        "title": info.get("title") or "Untitled",
+        "channel": info.get("channel") or info.get("uploader"),
+        "duration": duration,
+        "duration_string": info.get("duration_string")
+        or _format_duration(duration),
+        "thumbnail": thumbnail,
+        "webpage_url": info.get("webpage_url") or url,
+        "view_count": info.get("view_count"),
+        "live_status": info.get("live_status"),
     }
 
 
-def download(url: str, outdir: Path, audio_only: bool, quality: str) -> Path | None:
+def _format_duration(seconds: int | float | None) -> str | None:
+    if seconds is None:
+        return None
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def download(
+    url: str,
+    outdir: Path,
+    audio_only: bool,
+    quality: str,
+    progress_file: Path | None = None,
+) -> Path | None:
     ensure_ffmpeg_libs()
-    opts = build_opts(outdir, audio_only, quality)
+    if progress_file is not None:
+        _write_progress(progress_file, {"status": "starting", "percent": 0})
+
+    opts = build_opts(outdir, audio_only, quality, progress_file)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         if not info:
             return None
-        # Prefer the final merged path when available.
         requested = info.get("requested_downloads") or []
         if requested and requested[0].get("filepath"):
-            return Path(requested[0]["filepath"])
-        filename = ydl.prepare_filename(info)
-        if audio_only and has_ffmpeg():
-            filename = str(Path(filename).with_suffix(".mp3"))
-        elif info.get("ext") and not audio_only:
-            filename = str(Path(filename).with_suffix(f".{info['ext']}"))
-        # After merge, yt-dlp may report mp4 even if prepare_filename used another ext.
-        if not audio_only and opts.get("merge_output_format"):
-            merged = Path(filename).with_suffix(f".{opts['merge_output_format']}")
-            if merged.exists():
-                return merged
-        return Path(filename)
+            path = Path(requested[0]["filepath"])
+        else:
+            filename = ydl.prepare_filename(info)
+            if audio_only and has_ffmpeg():
+                filename = str(Path(filename).with_suffix(".mp3"))
+            elif info.get("ext") and not audio_only:
+                filename = str(Path(filename).with_suffix(f".{info['ext']}"))
+            path = Path(filename)
+            if not audio_only and opts.get("merge_output_format"):
+                merged = path.with_suffix(f".{opts['merge_output_format']}")
+                if merged.exists():
+                    path = merged
+
+    if progress_file is not None:
+        _write_progress(
+            progress_file,
+            {
+                "status": "finished",
+                "percent": 100,
+                "path": str(path) if path else None,
+                "title": (info or {}).get("title"),
+            },
+        )
+    return path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -171,6 +287,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Download audio only (MP3 if ffmpeg is installed)",
     )
+    parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Fetch metadata only and print JSON to stdout",
+    )
+    parser.add_argument(
+        "--progress-file",
+        type=Path,
+        default=None,
+        help="Write download progress JSON to this path",
+    )
+    parser.add_argument(
+        "--result-file",
+        type=Path,
+        default=None,
+        help="Write final result JSON to this path",
+    )
     return parser.parse_args(argv)
 
 
@@ -178,21 +311,34 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     ensure_ffmpeg_libs()
 
-    if not has_ffmpeg():
-        print(
-            "Note: ffmpeg unavailable. Downloading a lower-quality file that "
-            "already includes audio. Fix ffmpeg for best quality.",
-            file=sys.stderr,
-        )
-
     try:
-        path = download(args.url, args.output, args.audio_only, args.quality)
+        if args.info:
+            print(json.dumps(fetch_info(args.url)))
+            return 0
+
+        path = download(
+            args.url,
+            args.output,
+            args.audio_only,
+            args.quality,
+            args.progress_file,
+        )
     except DownloadError as exc:
         print(f"Download failed: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+    payload = {
+        "path": str(path) if path else None,
+        "filename": path.name if path else None,
+        "extension": path.suffix.lstrip(".") if path else None,
+        "size": path.stat().st_size if path and path.exists() else None,
+    }
+    if args.result_file is not None:
+        args.result_file.parent.mkdir(parents=True, exist_ok=True)
+        args.result_file.write_text(json.dumps(payload), encoding="utf-8")
 
     if path:
         print(f"Saved to: {path}")

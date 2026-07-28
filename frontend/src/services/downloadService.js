@@ -1,17 +1,46 @@
 import axiosClient from "../axios/axiosClient";
 import { VITE_API_BASE_URL } from "../config";
 
-export async function createDownload({ url, quality = "best", audioOnly = false }) {
+export async function previewVideo(url) {
+  const { data } = await axiosClient.post(
+    "/preview",
+    { url },
+    { __skipAuth: true }
+  );
+  return data;
+}
+
+export async function createDownload({
+  url,
+  quality = "best",
+  audioOnly = false,
+  preview = null,
+}) {
   const { data } = await axiosClient.post(
     "/downloads",
     {
       url,
       quality,
       audio_only: audioOnly,
+      ...(preview
+        ? {
+            title: preview.title,
+            channel: preview.channel,
+            duration: preview.duration,
+            duration_string: preview.duration_string,
+            thumbnail: preview.thumbnail,
+          }
+        : {}),
     },
     { __skipAuth: true }
   );
+  return data;
+}
 
+export async function getDownloadStatus(id) {
+  const { data } = await axiosClient.get(`/downloads/${id}`, {
+    __skipAuth: true,
+  });
   return data;
 }
 

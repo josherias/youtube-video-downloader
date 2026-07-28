@@ -18,6 +18,11 @@ class StoreDownloadRequest extends FormRequest
             'url' => ['required', 'url', 'max:2048'],
             'quality' => ['sometimes', Rule::in(['best', '1080', '720', '480'])],
             'audio_only' => ['sometimes', 'boolean'],
+            'title' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'channel' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'duration' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'duration_string' => ['sometimes', 'nullable', 'string', 'max:32'],
+            'thumbnail' => ['sometimes', 'nullable', 'url', 'max:2048'],
         ];
     }
 

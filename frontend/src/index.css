@@ -169,8 +169,8 @@ body {
 }
 
 .tg-secondary.ant-btn-default {
-  height: 2.75rem !important;
-  border-radius: 0.8rem !important;
+  height: 3rem !important;
+  border-radius: 0.9rem !important;
   border-color: var(--color-line) !important;
   color: var(--color-ink) !important;
   font-weight: 600 !important;

@@ -22,7 +22,11 @@ cd backend
 cp .env.example .env   # if needed
 composer install
 php artisan key:generate
+php artisan migrate
 php artisan serve      # http://localhost:8000
+
+# In a second terminal — required for async downloads
+php artisan queue:work
 ```
 
 Useful env keys:
@@ -32,6 +36,7 @@ APP_URL=http://localhost:8000
 FRONTEND_URL=http://localhost:5173
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 DOWNLOADER_TIMEOUT=600
+QUEUE_CONNECTION=database
 ```
 
 ## Frontend
@@ -47,6 +52,8 @@ yarn dev               # http://localhost:5173
 
 ## API
 
-- `POST /api/downloads` — `{ "url": "...", "quality": "best|1080|720|480", "audio_only": false }`
+- `POST /api/preview` — `{ "url": "..." }` → title, thumbnail, channel, duration
+- `POST /api/downloads` — `{ "url": "...", "quality": "best|1080|720|480", "audio_only": false }` → queues job (`202`)
+- `GET /api/downloads/{id}` — job status + progress
 - `GET /api/downloads/{id}/file` — download the prepared file
 - `GET /api/health` — health check
