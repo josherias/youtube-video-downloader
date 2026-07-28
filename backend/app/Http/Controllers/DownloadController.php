@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\PreviewDownloadRequest;
+use App\Http\Requests\StoreBatchDownloadRequest;
 use App\Http\Requests\StoreDownloadRequest;
 use App\Jobs\ProcessYouTubeDownload;
 use App\Models\DownloadJob;
@@ -53,7 +54,6 @@ class DownloadController extends ApiController
                 $preview !== [] ? $preview : null,
             );
 
-            // Queue immediately so the worker can start while the API responds.
             ProcessYouTubeDownload::dispatch($job->id);
         } catch (RuntimeException $e) {
             return $this->errorResponse($e->getMessage(), 422);
@@ -67,6 +67,47 @@ class DownloadController extends ApiController
             'message' => 'Download queued.',
             'data' => $job->fresh()->toApiArray(),
         ], 202);
+    }
+
+    public function storeBatch(StoreBatchDownloadRequest $request): JsonResponse
+    {
+        try {
+            $validated = $request->validated();
+            $result = $this->downloads->queueBatch(
+                $validated['items'],
+                $validated['quality'] ?? 'best',
+                (bool) ($validated['audio_only'] ?? false),
+            );
+
+            foreach ($result['jobs'] as $job) {
+                ProcessYouTubeDownload::dispatch($job->id);
+            }
+
+            $batch = $this->downloads->batchStatus($result['batch_id']);
+        } catch (RuntimeException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return $this->errorResponse('Unexpected batch download error.', 500);
+        }
+
+        return $this->successResponser([
+            'message' => 'Batch queued.',
+            'data' => $batch,
+        ], 202);
+    }
+
+    public function showBatch(string $id): JsonResponse
+    {
+        $batch = $this->downloads->batchStatus($id);
+        if ($batch === null) {
+            return $this->errorResponse('Batch not found.', 404);
+        }
+
+        return $this->successResponser([
+            'data' => $batch,
+        ]);
     }
 
     public function show(string $id): JsonResponse

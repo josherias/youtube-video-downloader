@@ -37,8 +37,39 @@ export async function createDownload({
   return data;
 }
 
+export async function createBatchDownload({
+  items,
+  quality = "best",
+  audioOnly = false,
+}) {
+  const { data } = await axiosClient.post(
+    "/downloads/batch",
+    {
+      quality,
+      audio_only: audioOnly,
+      items: items.map((item) => ({
+        url: item.webpage_url || item.url,
+        title: item.title,
+        channel: item.channel,
+        duration: item.duration,
+        duration_string: item.duration_string,
+        thumbnail: item.thumbnail,
+      })),
+    },
+    { __skipAuth: true }
+  );
+  return data;
+}
+
 export async function getDownloadStatus(id) {
   const { data } = await axiosClient.get(`/downloads/${id}`, {
+    __skipAuth: true,
+  });
+  return data;
+}
+
+export async function getBatchStatus(id) {
+  const { data } = await axiosClient.get(`/batches/${id}`, {
     __skipAuth: true,
   });
   return data;

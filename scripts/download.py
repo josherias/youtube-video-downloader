@@ -174,37 +174,127 @@ def _make_progress_hook(progress_file: Path):
     return hook
 
 
-def fetch_info(url: str) -> dict:
+def _should_extract_playlist(url: str) -> bool:
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(url)
+    path = (parsed.path or "").lower()
+    query = parse_qs(parsed.query or "")
+    if "playlist" in path:
+        return True
+    # list= without a specific video id → playlist/mix landing URL
+    if "list" in query and "v" not in query:
+        return True
+    return False
+
+
+def _entry_thumbnail(entry: dict) -> str | None:
+    thumbnails = entry.get("thumbnails") or []
+    if entry.get("thumbnail"):
+        return entry["thumbnail"]
+    if thumbnails:
+        return thumbnails[-1].get("url")
+    video_id = entry.get("id")
+    if video_id:
+        return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    return None
+
+
+def _normalize_video(info: dict, fallback_url: str) -> dict:
+    duration = info.get("duration")
+    return {
+        "type": "video",
+        "id": info.get("id"),
+        "title": info.get("title") or "Untitled",
+        "channel": info.get("channel") or info.get("uploader"),
+        "duration": duration,
+        "duration_string": info.get("duration_string") or _format_duration(duration),
+        "thumbnail": _entry_thumbnail(info),
+        "webpage_url": info.get("webpage_url")
+        or info.get("url")
+        or (
+            f"https://www.youtube.com/watch?v={info['id']}"
+            if info.get("id")
+            else fallback_url
+        ),
+        "view_count": info.get("view_count"),
+        "live_status": info.get("live_status"),
+    }
+
+
+def fetch_info(url: str, *, max_entries: int = 50) -> dict:
     ensure_ffmpeg_libs()
     opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
-        "noplaylist": True,
+        "extract_flat": "in_playlist",
+        "noplaylist": not _should_extract_playlist(url),
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     if not info:
         raise RuntimeError("Could not fetch video metadata.")
 
-    thumbnails = info.get("thumbnails") or []
-    thumbnail = info.get("thumbnail")
-    if not thumbnail and thumbnails:
-        thumbnail = thumbnails[-1].get("url")
+    entries = info.get("entries")
+    is_playlist = info.get("_type") == "playlist" or (
+        isinstance(entries, list) and len(entries) > 1
+    )
 
-    duration = info.get("duration")
-    return {
-        "id": info.get("id"),
-        "title": info.get("title") or "Untitled",
-        "channel": info.get("channel") or info.get("uploader"),
-        "duration": duration,
-        "duration_string": info.get("duration_string")
-        or _format_duration(duration),
-        "thumbnail": thumbnail,
-        "webpage_url": info.get("webpage_url") or url,
-        "view_count": info.get("view_count"),
-        "live_status": info.get("live_status"),
-    }
+    if is_playlist:
+        videos: list[dict] = []
+        for entry in entries or []:
+            if not entry:
+                continue
+            video_id = entry.get("id")
+            if not video_id and isinstance(entry.get("url"), str):
+                # Flat entries sometimes only expose a URL/id-like string.
+                maybe = entry["url"]
+                if maybe.startswith("http"):
+                    video_id = None
+                else:
+                    video_id = maybe
+            webpage = entry.get("url") or entry.get("webpage_url")
+            if video_id and (not webpage or not str(webpage).startswith("http")):
+                webpage = f"https://www.youtube.com/watch?v={video_id}"
+            if not webpage:
+                continue
+            duration = entry.get("duration")
+            videos.append(
+                {
+                    "id": video_id,
+                    "title": entry.get("title") or "Untitled",
+                    "channel": entry.get("channel")
+                    or entry.get("uploader")
+                    or info.get("channel")
+                    or info.get("uploader"),
+                    "duration": duration,
+                    "duration_string": entry.get("duration_string")
+                    or _format_duration(duration),
+                    "thumbnail": _entry_thumbnail(entry),
+                    "webpage_url": webpage,
+                }
+            )
+
+        limited = videos[: max(1, max_entries)]
+        return {
+            "type": "playlist",
+            "id": info.get("id"),
+            "title": info.get("title") or "Playlist",
+            "channel": info.get("channel") or info.get("uploader"),
+            "thumbnail": _entry_thumbnail(info)
+            or (limited[0]["thumbnail"] if limited else None),
+            "webpage_url": info.get("webpage_url") or url,
+            "entry_count": len(videos),
+            "entries": limited,
+            "truncated": len(videos) > len(limited),
+        }
+
+    # Single-video result (possibly a one-item playlist wrapper).
+    if isinstance(entries, list) and len(entries) == 1 and entries[0]:
+        return _normalize_video(entries[0], url)
+
+    return _normalize_video(info, url)
 
 
 def _format_duration(seconds: int | float | None) -> str | None:
@@ -293,6 +383,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fetch metadata only and print JSON to stdout",
     )
     parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=50,
+        help="Max playlist entries to return with --info (default: 50)",
+    )
+    parser.add_argument(
         "--progress-file",
         type=Path,
         default=None,
@@ -313,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.info:
-            print(json.dumps(fetch_info(args.url)))
+            print(json.dumps(fetch_info(args.url, max_entries=args.max_entries)))
             return 0
 
         path = download(

@@ -52,8 +52,13 @@ yarn dev               # http://localhost:5173
 
 ## API
 
-- `POST /api/preview` — `{ "url": "..." }` → title, thumbnail, channel, duration
-- `POST /api/downloads` — `{ "url": "...", "quality": "best|1080|720|480", "audio_only": false }` → queues job (`202`)
-- `GET /api/downloads/{id}` — job status + progress
-- `GET /api/downloads/{id}/file` — download the prepared file
+- `POST /api/preview` — `{ "url": "..." }` → video or playlist metadata
+- `POST /api/downloads` — queue a single video
+- `POST /api/downloads/batch` — `{ "items": [{ "url": "..." }], "quality": "720", "audio_only": false }`
+- `GET /api/batches/{id}` — batch status + per-video progress
+- `GET /api/downloads/{id}` — single job status + progress
+- `GET /api/downloads/{id}/file` — download a ready file
 - `GET /api/health` — health check
+
+Playlist previews are capped by `DOWNLOADER_MAX_PLAYLIST_ENTRIES` (default 50).
+Batch size is capped by `DOWNLOADER_MAX_BATCH_SIZE` (default 25).

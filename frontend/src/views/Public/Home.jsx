@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
+  Checkbox,
   ConfigProvider,
   Form,
   Input,
@@ -10,8 +11,10 @@ import {
 } from "antd";
 import toast from "react-hot-toast";
 import {
+  createBatchDownload,
   createDownload,
   formatBytes,
+  getBatchStatus,
   getDownloadFileUrl,
   getDownloadStatus,
   previewVideo,
@@ -49,6 +52,8 @@ function statusLabel(status) {
       return "Downloading";
     case "completed":
       return "Ready";
+    case "partial":
+      return "Partial";
     case "failed":
       return "Failed";
     default:
@@ -56,18 +61,25 @@ function statusLabel(status) {
   }
 }
 
+function entryKey(entry, index) {
+  return entry.id || entry.webpage_url || String(index);
+}
+
 export default function Home() {
   const [form] = Form.useForm();
   const [previewLoading, setPreviewLoading] = useState(false);
   const [queueLoading, setQueueLoading] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [selectedKeys, setSelectedKeys] = useState([]);
   const [job, setJob] = useState(null);
+  const [batch, setBatch] = useState(null);
   const [error, setError] = useState("");
   const [quality, setQuality] = useState("best");
   const pollRef = useRef(null);
 
   const audioOnly = Form.useWatch("audio_only", form);
   const urlValue = Form.useWatch("url", form);
+  const isPlaylist = preview?.type === "playlist";
 
   const helper = useMemo(() => {
     if (audioOnly) {
@@ -76,24 +88,27 @@ export default function Home() {
     return "Exports an MP4 with audio — H.264 + AAC when available.";
   }, [audioOnly]);
 
-  const isBusy =
-    previewLoading ||
-    queueLoading ||
+  const activeWork =
     job?.status === "queued" ||
-    job?.status === "processing";
+    job?.status === "processing" ||
+    batch?.status === "queued" ||
+    batch?.status === "processing";
+
+  const isBusy = previewLoading || queueLoading || activeWork;
 
   useEffect(() => {
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-      }
+      if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
 
   useEffect(() => {
     setPreview(null);
+    setSelectedKeys([]);
     setJob(null);
+    setBatch(null);
     setError("");
+    stopPolling();
   }, [urlValue]);
 
   const stopPolling = () => {
@@ -103,7 +118,7 @@ export default function Home() {
     }
   };
 
-  const startPolling = (id) => {
+  const startJobPolling = (id) => {
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
@@ -111,7 +126,6 @@ export default function Home() {
         const next = response?.data;
         if (!next) return;
         setJob(next);
-
         if (next.status === "completed") {
           stopPolling();
           toast.success("Your file is ready");
@@ -122,13 +136,43 @@ export default function Home() {
         }
       } catch (err) {
         stopPolling();
-        const message =
+        setError(
           err?.response?.data?.error ||
-          err?.message ||
-          "Could not check download status.";
-        setError(message);
+            err?.message ||
+            "Could not check download status."
+        );
       }
     }, 700);
+  };
+
+  const startBatchPolling = (id) => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const response = await getBatchStatus(id);
+        const next = response?.data;
+        if (!next) return;
+        setBatch(next);
+        if (next.status === "completed") {
+          stopPolling();
+          toast.success("Batch complete");
+        } else if (next.status === "partial") {
+          stopPolling();
+          toast.success("Batch finished with some failures");
+        } else if (next.status === "failed") {
+          stopPolling();
+          setError("All videos in this batch failed.");
+          toast.error("Batch failed");
+        }
+      } catch (err) {
+        stopPolling();
+        setError(
+          err?.response?.data?.error ||
+            err?.message ||
+            "Could not check batch status."
+        );
+      }
+    }, 900);
   };
 
   const onPreview = async () => {
@@ -137,13 +181,24 @@ export default function Home() {
       setPreviewLoading(true);
       setError("");
       setJob(null);
+      setBatch(null);
 
       const response = await previewVideo(values.url.trim());
       const payload = response?.data;
       if (!payload?.title) {
         throw new Error("Could not load preview.");
       }
+
       setPreview(payload);
+      if (payload.type === "playlist") {
+        const keys = (payload.entries || []).map(entryKey);
+        setSelectedKeys(keys);
+        toast.success(
+          `Found ${payload.entry_count || keys.length} videos in playlist`
+        );
+      } else {
+        setSelectedKeys([]);
+      }
     } catch (err) {
       if (err?.errorFields) return;
       const message =
@@ -157,13 +212,49 @@ export default function Home() {
     }
   };
 
+  const selectedEntries = useMemo(() => {
+    if (!isPlaylist) return [];
+    return (preview.entries || []).filter((entry, index) =>
+      selectedKeys.includes(entryKey(entry, index))
+    );
+  }, [isPlaylist, preview, selectedKeys]);
+
   const onFinish = async (values) => {
     setQueueLoading(true);
     setError("");
     setJob(null);
+    setBatch(null);
     stopPolling();
 
     try {
+      if (isPlaylist) {
+        if (selectedEntries.length === 0) {
+          throw new Error("Select at least one video from the playlist.");
+        }
+
+        const response = await createBatchDownload({
+          items: selectedEntries,
+          quality: quality || "best",
+          audioOnly: Boolean(values.audio_only),
+        });
+
+        const payload = response?.data;
+        if (!payload?.id) {
+          throw new Error("Unexpected response from server.");
+        }
+
+        setBatch(payload);
+        if (payload.status === "completed") {
+          toast.success("Batch complete");
+        } else if (
+          payload.status === "processing" ||
+          payload.status === "queued"
+        ) {
+          startBatchPolling(payload.id);
+        }
+        return;
+      }
+
       const response = await createDownload({
         url: values.url.trim(),
         quality: quality || "best",
@@ -177,23 +268,12 @@ export default function Home() {
       }
 
       setJob(payload);
-      if (payload.title || payload.thumbnail) {
-        setPreview((current) => ({
-          ...(current || {}),
-          title: payload.title || current?.title,
-          thumbnail: payload.thumbnail || current?.thumbnail,
-          channel: payload.channel || current?.channel,
-          duration_string:
-            payload.duration_string || current?.duration_string,
-        }));
-      }
-
       if (payload.status === "completed") {
         toast.success("Your file is ready");
       } else if (payload.status === "failed") {
         setError(payload.error_message || "Download failed.");
       } else {
-        startPolling(payload.id);
+        startJobPolling(payload.id);
       }
     } catch (err) {
       const message =
@@ -207,17 +287,22 @@ export default function Home() {
     }
   };
 
+  const toggleAll = (checked) => {
+    if (!isPlaylist) return;
+    setSelectedKeys(checked ? (preview.entries || []).map(entryKey) : []);
+  };
+
   return (
     <ConfigProvider theme={antTheme}>
-      <section className="mx-auto grid max-w-5xl gap-10 lg:grid-cols-[1fr_1.05fr] lg:items-center lg:gap-14">
-        <div className="animate-rise max-w-xl">
+      <section className="mx-auto grid max-w-5xl gap-10 lg:grid-cols-[1fr_1.05fr] lg:items-start lg:gap-14">
+        <div className="animate-rise max-w-xl lg:sticky lg:top-10">
           <h1 className="brand-mark font-display text-[clamp(3.4rem,8vw,5.6rem)] leading-[0.92] text-ink">
             Tube<span className="text-accent">Grab</span>
           </h1>
 
           <p className="mt-5 max-w-md text-lg leading-relaxed text-muted sm:text-xl">
-            Preview the video, then download a clean MP4 with live progress —
-            no account, no clutter.
+            Preview a video or playlist, pick what you want, then download with
+            live progress.
           </p>
         </div>
 
@@ -226,7 +311,7 @@ export default function Home() {
             <div>
               <h2 className="text-lg font-semibold text-ink">New download</h2>
               <p className="mt-1 text-sm text-muted">
-                Works with youtube.com and youtu.be links.
+                Video, playlist, or youtu.be links.
               </p>
             </div>
             {isBusy ? (
@@ -254,7 +339,7 @@ export default function Home() {
               <Input
                 className="tg-input"
                 size="large"
-                placeholder="https://www.youtube.com/watch?v=..."
+                placeholder="https://www.youtube.com/playlist?list=..."
                 allowClear
                 disabled={isBusy}
               />
@@ -280,7 +365,11 @@ export default function Home() {
                 disabled={isBusy && !queueLoading}
                 block
               >
-                {queueLoading ? "Starting…" : "Download"}
+                {queueLoading
+                  ? "Starting…"
+                  : isPlaylist
+                    ? `Download (${selectedEntries.length})`
+                    : "Download"}
               </Button>
             </div>
 
@@ -320,7 +409,7 @@ export default function Home() {
             <p className="mb-2 text-xs leading-relaxed text-muted">{helper}</p>
           </Form>
 
-          {preview ? (
+          {preview && !isPlaylist ? (
             <div className="animate-fade mt-5 overflow-hidden rounded-2xl border border-line bg-white">
               <div className="grid gap-0 sm:grid-cols-[140px_1fr]">
                 {preview.thumbnail ? (
@@ -347,6 +436,86 @@ export default function Home() {
                       .join(" · ")}
                   </p>
                 </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isPlaylist ? (
+            <div className="animate-fade mt-5 rounded-2xl border border-line bg-white p-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">
+                    Playlist
+                  </p>
+                  <p className="mt-1 truncate text-base font-semibold text-ink">
+                    {preview.title}
+                  </p>
+                  <p className="mt-1 text-sm text-muted">
+                    {[preview.channel, `${preview.entry_count || 0} videos`]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    {preview.truncated ? " · showing first items" : ""}
+                  </p>
+                </div>
+                <Checkbox
+                  checked={
+                    selectedKeys.length > 0 &&
+                    selectedKeys.length === (preview.entries || []).length
+                  }
+                  indeterminate={
+                    selectedKeys.length > 0 &&
+                    selectedKeys.length < (preview.entries || []).length
+                  }
+                  onChange={(e) => toggleAll(e.target.checked)}
+                  disabled={isBusy}
+                >
+                  All
+                </Checkbox>
+              </div>
+
+              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                {(preview.entries || []).map((entry, index) => {
+                  const key = entryKey(entry, index);
+                  return (
+                    <label
+                      key={key}
+                      className="flex cursor-pointer items-center gap-3 rounded-xl border border-line px-3 py-2 hover:bg-panel/60"
+                    >
+                      <Checkbox
+                        checked={selectedKeys.includes(key)}
+                        disabled={isBusy}
+                        onChange={(e) => {
+                          setSelectedKeys((current) =>
+                            e.target.checked
+                              ? [...current, key]
+                              : current.filter((item) => item !== key)
+                          );
+                        }}
+                      />
+                      {entry.thumbnail ? (
+                        <img
+                          src={entry.thumbnail}
+                          alt=""
+                          className="h-12 w-20 rounded-md object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-12 w-20 items-center justify-center rounded-md bg-panel text-[10px] text-muted">
+                          N/A
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink">
+                          {entry.title}
+                        </p>
+                        <p className="truncate text-xs text-muted">
+                          {[entry.channel, entry.duration_string]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -418,7 +587,80 @@ export default function Home() {
             </div>
           ) : null}
 
-          {error && !job ? (
+          {batch ? (
+            <div className="animate-rise-late mt-5 rounded-2xl border border-line bg-panel/80 p-4 sm:p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">
+                  Batch · {statusLabel(batch.status)}
+                </p>
+                <span className="text-sm font-medium text-ink">
+                  {batch.completed}/{batch.total}
+                </span>
+              </div>
+
+              <Progress
+                className="mt-3"
+                percent={Math.round(batch.progress || 0)}
+                showInfo={false}
+                strokeColor="#d61f3c"
+                trailColor="#e4e6eb"
+              />
+
+              <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
+                {(batch.jobs || []).map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border border-line bg-white px-3 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-ink">
+                          {item.title || "Video"}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">
+                          {statusLabel(item.status)}
+                          {item.status === "processing" ||
+                          item.status === "queued"
+                            ? ` · ${Math.round(item.progress || 0)}%`
+                            : ""}
+                          {item.status === "completed" && item.size
+                            ? ` · ${formatBytes(item.size)}`
+                            : ""}
+                        </p>
+                      </div>
+                      {item.status === "completed" ? (
+                        <a
+                          className="shrink-0 text-sm font-semibold text-accent hover:underline"
+                          href={getDownloadFileUrl(item.id)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Save
+                        </a>
+                      ) : null}
+                    </div>
+                    {(item.status === "queued" ||
+                      item.status === "processing") && (
+                      <Progress
+                        className="mt-2"
+                        percent={Math.round(item.progress || 0)}
+                        size="small"
+                        showInfo={false}
+                        strokeColor="#d61f3c"
+                      />
+                    )}
+                    {item.status === "failed" && item.error_message ? (
+                      <p className="mt-2 text-xs text-accent">
+                        {item.error_message}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {error && !job && !batch ? (
             <Alert
               className="animate-fade mt-5"
               type="error"

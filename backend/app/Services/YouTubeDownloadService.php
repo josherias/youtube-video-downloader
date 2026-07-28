@@ -16,10 +16,18 @@ class YouTubeDownloadService
 
         $script = $this->scriptPath();
         $python = $this->resolvePython();
+        $maxEntries = (int) config('downloader.max_playlist_entries', 50);
 
-        $result = Process::timeout(90)
+        $result = Process::timeout(120)
             ->env($this->processEnv())
-            ->run([$python, $script, $url, '--info']);
+            ->run([
+                $python,
+                $script,
+                $url,
+                '--info',
+                '--max-entries',
+                (string) $maxEntries,
+            ]);
 
         if (! $result->successful()) {
             $stderr = trim($result->errorOutput() ?: $result->output());
@@ -31,15 +39,27 @@ class YouTubeDownloadService
             throw new RuntimeException('Invalid metadata response.');
         }
 
+        if (($payload['type'] ?? 'video') !== 'playlist') {
+            $payload['type'] = 'video';
+        }
+
         return $payload;
     }
 
-    public function queue(string $url, string $quality = 'best', bool $audioOnly = false, ?array $preview = null): DownloadJob
-    {
+    public function queue(
+        string $url,
+        string $quality = 'best',
+        bool $audioOnly = false,
+        ?array $preview = null,
+        ?string $batchId = null,
+        ?int $batchIndex = null,
+    ): DownloadJob {
         $this->assertYouTubeUrl($url);
 
         $job = DownloadJob::query()->create([
             'id' => (string) Str::uuid(),
+            'batch_id' => $batchId,
+            'batch_index' => $batchIndex,
             'url' => $url,
             'quality' => $quality,
             'audio_only' => $audioOnly,
@@ -55,6 +75,117 @@ class YouTubeDownloadService
         File::ensureDirectoryExists($this->jobDirectory($job->id));
 
         return $job;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array{batch_id: string, jobs: list<DownloadJob>}
+     */
+    public function queueBatch(array $items, string $quality = 'best', bool $audioOnly = false): array
+    {
+        $max = (int) config('downloader.max_batch_size', 25);
+        if ($items === []) {
+            throw new RuntimeException('Select at least one video to download.');
+        }
+        if (count($items) > $max) {
+            throw new RuntimeException("Batch downloads are limited to {$max} videos.");
+        }
+
+        $batchId = (string) Str::uuid();
+        $jobs = [];
+
+        foreach (array_values($items) as $index => $item) {
+            $url = $item['url'] ?? $item['webpage_url'] ?? null;
+            if (! is_string($url) || $url === '') {
+                throw new RuntimeException('Each batch item needs a valid URL.');
+            }
+
+            $this->assertYouTubeUrl($url);
+
+            $preview = array_filter([
+                'title' => $item['title'] ?? null,
+                'channel' => $item['channel'] ?? null,
+                'duration' => $item['duration'] ?? null,
+                'duration_string' => $item['duration_string'] ?? null,
+                'thumbnail' => $item['thumbnail'] ?? null,
+            ], fn ($value) => $value !== null && $value !== '');
+
+            $jobs[] = $this->queue(
+                $url,
+                $quality,
+                $audioOnly,
+                $preview !== [] ? $preview : null,
+                $batchId,
+                $index,
+            );
+        }
+
+        return [
+            'batch_id' => $batchId,
+            'jobs' => $jobs,
+        ];
+    }
+
+    public function batchStatus(string $batchId): ?array
+    {
+        if (! Str::isUuid($batchId)) {
+            return null;
+        }
+
+        $jobs = DownloadJob::query()
+            ->where('batch_id', $batchId)
+            ->orderBy('batch_index')
+            ->get();
+
+        if ($jobs->isEmpty()) {
+            return null;
+        }
+
+        foreach ($jobs as $job) {
+            if (in_array($job->status, ['queued', 'processing'], true)) {
+                $this->readProgress($job);
+            }
+        }
+
+        $jobs = DownloadJob::query()
+            ->where('batch_id', $batchId)
+            ->orderBy('batch_index')
+            ->get();
+
+        $total = $jobs->count();
+        $completed = $jobs->where('status', 'completed')->count();
+        $failed = $jobs->where('status', 'failed')->count();
+        $processing = $jobs->whereIn('status', ['queued', 'processing'])->count();
+
+        $status = match (true) {
+            $processing > 0 => 'processing',
+            $failed === $total => 'failed',
+            $completed === $total => 'completed',
+            $failed > 0 && $completed > 0 => 'partial',
+            default => 'processing',
+        };
+
+        $progressSum = $jobs->sum(function (DownloadJob $job) {
+            if ($job->status === 'completed') {
+                return 100;
+            }
+            if ($job->status === 'failed') {
+                return 100;
+            }
+
+            return (float) $job->progress;
+        });
+
+        return [
+            'id' => $batchId,
+            'status' => $status,
+            'progress' => $total > 0 ? round($progressSum / $total, 1) : 0,
+            'total' => $total,
+            'completed' => $completed,
+            'failed' => $failed,
+            'processing' => $processing,
+            'jobs' => $jobs->map->toApiArray()->values()->all(),
+        ];
     }
 
     public function run(DownloadJob $job): DownloadJob

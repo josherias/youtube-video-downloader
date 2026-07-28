@@ -15,6 +15,8 @@ class DownloadJob extends Model
 
     protected $fillable = [
         'id',
+        'batch_id',
+        'batch_index',
         'url',
         'quality',
         'audio_only',
@@ -38,6 +40,7 @@ class DownloadJob extends Model
             'progress' => 'float',
             'duration' => 'integer',
             'size' => 'integer',
+            'batch_index' => 'integer',
         ];
     }
 
@@ -45,6 +48,8 @@ class DownloadJob extends Model
     {
         return [
             'id' => $this->id,
+            'batch_id' => $this->batch_id,
+            'batch_index' => $this->batch_index,
             'url' => $this->url,
             'quality' => $this->quality,
             'audio_only' => $this->audio_only,
