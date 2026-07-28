@@ -21,6 +21,8 @@ class DownloadJob extends Model
         'quality',
         'format',
         'codec',
+        'trim_start',
+        'trim_end',
         'audio_only',
         'status',
         'progress',
@@ -33,6 +35,8 @@ class DownloadJob extends Model
         'extension',
         'size',
         'error_message',
+        'client_ip',
+        'user_agent',
     ];
 
     protected function casts(): array
@@ -43,6 +47,8 @@ class DownloadJob extends Model
             'duration' => 'integer',
             'size' => 'integer',
             'batch_index' => 'integer',
+            'trim_start' => 'float',
+            'trim_end' => 'float',
         ];
     }
 
@@ -56,6 +62,8 @@ class DownloadJob extends Model
             'quality' => $this->quality,
             'format' => $this->format,
             'codec' => $this->codec,
+            'trim_start' => $this->trim_start,
+            'trim_end' => $this->trim_end,
             'audio_only' => $this->audio_only,
             'status' => $this->status,
             'progress' => (float) $this->progress,
@@ -74,5 +82,14 @@ class DownloadJob extends Model
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];
+    }
+
+    public function toAdminArray(): array
+    {
+        return array_merge($this->toApiArray(), [
+            'client_ip' => $this->client_ip,
+            'user_agent' => $this->user_agent,
+            'is_batch' => $this->batch_id !== null,
+        ]);
     }
 }

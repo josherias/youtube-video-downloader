@@ -1,7 +1,16 @@
 import { createBrowserRouter } from "react-router-dom";
+import AdminLayout from "../layouts/AdminLayout";
 import GuestLayout from "../layouts/GuestLayout";
+import AdminClients from "../views/Admin/Clients";
+import AdminDownloads from "../views/Admin/Downloads";
+import AdminLogin from "../views/Admin/Login";
+import AdminOverview from "../views/Admin/Overview";
 import Home from "../views/Public/Home";
-import { HOME_PATH } from "./routes";
+import {
+  ADMIN_LOGIN_PATH,
+  ADMIN_PATH,
+  HOME_PATH,
+} from "./routes";
 
 const router = createBrowserRouter([
   {
@@ -11,6 +20,28 @@ const router = createBrowserRouter([
       {
         index: true,
         element: <Home />,
+      },
+    ],
+  },
+  {
+    path: ADMIN_LOGIN_PATH,
+    element: <AdminLogin />,
+  },
+  {
+    path: ADMIN_PATH,
+    element: <AdminLayout />,
+    children: [
+      {
+        index: true,
+        element: <AdminOverview />,
+      },
+      {
+        path: "downloads",
+        element: <AdminDownloads />,
+      },
+      {
+        path: "clients",
+        element: <AdminClients />,
       },
     ],
   },

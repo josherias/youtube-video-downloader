@@ -173,6 +173,8 @@ def build_opts(
     container: str = "mp4",
     codec: str = "compatible",
     progress_file: Path | None = None,
+    start: float | None = None,
+    end: float | None = None,
 ) -> dict:
     outdir.mkdir(parents=True, exist_ok=True)
     container = (container or "mp4").lower()
@@ -182,6 +184,16 @@ def build_opts(
         opts = _audio_opts(outdir, container, codec)
     else:
         opts = _video_opts(outdir, quality, container, codec)
+
+    if start is not None or end is not None:
+        from yt_dlp.utils import download_range_func
+
+        start_s = float(start or 0)
+        end_s = float(end) if end is not None else float("inf")
+        if end_s <= start_s:
+            raise ValueError("Clip end must be greater than start.")
+        opts["download_ranges"] = download_range_func(None, [(start_s, end_s)])
+        opts["force_keyframes_at_cuts"] = True
 
     if progress_file is not None:
         opts["progress_hooks"] = [_make_progress_hook(progress_file)]
@@ -369,6 +381,30 @@ def _format_duration(seconds: int | float | None) -> str | None:
     return f"{m}:{s:02d}"
 
 
+def parse_timestamp(value: str | float | int | None) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.replace(".", "", 1).isdigit():
+        return float(text)
+    parts = text.split(":")
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError as exc:
+        raise ValueError(f"Invalid timestamp: {value}") from exc
+    if len(nums) == 3:
+        return nums[0] * 3600 + nums[1] * 60 + nums[2]
+    if len(nums) == 2:
+        return nums[0] * 60 + nums[1]
+    if len(nums) == 1:
+        return nums[0]
+    raise ValueError(f"Invalid timestamp: {value}")
+
+
 def download(
     url: str,
     outdir: Path,
@@ -376,12 +412,22 @@ def download(
     container: str = "mp4",
     codec: str = "compatible",
     progress_file: Path | None = None,
+    start: float | None = None,
+    end: float | None = None,
 ) -> Path | None:
     ensure_ffmpeg_libs()
     if progress_file is not None:
         _write_progress(progress_file, {"status": "starting", "percent": 0})
 
-    opts = build_opts(outdir, quality, container, codec, progress_file)
+    opts = build_opts(
+        outdir,
+        quality,
+        container,
+        codec,
+        progress_file,
+        start=start,
+        end=end,
+    )
     audio_container = container in {"mp3", "m4a"}
 
     with YoutubeDL(opts) as ydl:
@@ -449,6 +495,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Codec preference: compatible (widely playable) or best quality",
     )
     parser.add_argument(
+        "--start",
+        default=None,
+        help="Clip start time in seconds or HH:MM:SS / MM:SS",
+    )
+    parser.add_argument(
+        "--end",
+        default=None,
+        help="Clip end time in seconds or HH:MM:SS / MM:SS",
+    )
+    parser.add_argument(
         "-a",
         "--audio-only",
         action="store_true",
@@ -500,6 +556,8 @@ def main(argv: list[str] | None = None) -> int:
             container,
             args.codec,
             args.progress_file,
+            start=parse_timestamp(args.start),
+            end=parse_timestamp(args.end),
         )
     except DownloadError as exc:
         print(f"Download failed: {exc}", file=sys.stderr)

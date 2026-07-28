@@ -54,6 +54,10 @@ class YouTubeDownloadService
         ?array $preview = null,
         ?string $batchId = null,
         ?int $batchIndex = null,
+        ?float $trimStart = null,
+        ?float $trimEnd = null,
+        ?string $clientIp = null,
+        ?string $userAgent = null,
     ): DownloadJob {
         $this->assertYouTubeUrl($url);
 
@@ -66,6 +70,13 @@ class YouTubeDownloadService
             $codec = 'compatible';
         }
 
+        if ($trimStart !== null || $trimEnd !== null) {
+            $trimStart = $trimStart ?? 0.0;
+            if ($trimEnd === null || $trimEnd <= $trimStart) {
+                throw new RuntimeException('Clip end must be greater than start.');
+            }
+        }
+
         $job = DownloadJob::query()->create([
             'id' => (string) Str::uuid(),
             'batch_id' => $batchId,
@@ -74,6 +85,8 @@ class YouTubeDownloadService
             'quality' => $quality,
             'format' => $format,
             'codec' => $codec,
+            'trim_start' => $trimStart,
+            'trim_end' => $trimEnd,
             'audio_only' => in_array($format, ['mp3', 'm4a'], true),
             'status' => 'queued',
             'progress' => 0,
@@ -82,6 +95,8 @@ class YouTubeDownloadService
             'duration' => isset($preview['duration']) ? (int) $preview['duration'] : null,
             'duration_string' => $preview['duration_string'] ?? null,
             'thumbnail' => $preview['thumbnail'] ?? null,
+            'client_ip' => $clientIp,
+            'user_agent' => $userAgent !== null ? Str::limit($userAgent, 1000, '') : null,
         ]);
 
         File::ensureDirectoryExists($this->jobDirectory($job->id));
@@ -98,6 +113,8 @@ class YouTubeDownloadService
         string $quality = 'best',
         string $format = 'mp4',
         string $codec = 'compatible',
+        ?string $clientIp = null,
+        ?string $userAgent = null,
     ): array {
         $max = (int) config('downloader.max_batch_size', 25);
         if ($items === []) {
@@ -134,6 +151,10 @@ class YouTubeDownloadService
                 $preview !== [] ? $preview : null,
                 $batchId,
                 $index,
+                null,
+                null,
+                $clientIp,
+                $userAgent,
             );
         }
 
@@ -172,21 +193,22 @@ class YouTubeDownloadService
         $total = $jobs->count();
         $completed = $jobs->where('status', 'completed')->count();
         $failed = $jobs->where('status', 'failed')->count();
+        $cancelled = $jobs->where('status', 'cancelled')->count();
         $processing = $jobs->whereIn('status', ['queued', 'processing'])->count();
 
         $status = match (true) {
             $processing > 0 => 'processing',
+            $cancelled === $total => 'cancelled',
             $failed === $total => 'failed',
             $completed === $total => 'completed',
-            $failed > 0 && $completed > 0 => 'partial',
+            ($failed + $cancelled) > 0 && $completed > 0 => 'partial',
+            $cancelled > 0 && $failed > 0 && $completed === 0 => 'cancelled',
+            $cancelled > 0 && $completed === 0 && $failed === 0 => 'cancelled',
             default => 'processing',
         };
 
         $progressSum = $jobs->sum(function (DownloadJob $job) {
-            if ($job->status === 'completed') {
-                return 100;
-            }
-            if ($job->status === 'failed') {
+            if (in_array($job->status, ['completed', 'failed', 'cancelled'], true)) {
                 return 100;
             }
 
@@ -200,13 +222,72 @@ class YouTubeDownloadService
             'total' => $total,
             'completed' => $completed,
             'failed' => $failed,
+            'cancelled' => $cancelled,
             'processing' => $processing,
             'jobs' => $jobs->map->toApiArray()->values()->all(),
         ];
     }
 
+    public function cancel(string $id): DownloadJob
+    {
+        $job = DownloadJob::query()->find($id);
+        if (! $job) {
+            throw new RuntimeException('Download not found.');
+        }
+
+        if (! in_array($job->status, ['queued', 'processing'], true)) {
+            throw new RuntimeException('Only queued or active downloads can be cancelled.');
+        }
+
+        File::ensureDirectoryExists($this->jobDirectory($job->id));
+        File::put($this->cancelFlagPath($job->id), '1');
+
+        // Drop pending queue payloads so a cancelled job never starts.
+        try {
+            \Illuminate\Support\Facades\DB::table('jobs')
+                ->where('payload', 'like', '%'.$job->id.'%')
+                ->delete();
+        } catch (\Throwable) {
+            // Best-effort; cancel flag still stops an in-flight worker.
+        }
+
+        return $this->markCancelled($job);
+    }
+
+    public function cancelBatch(string $batchId): array
+    {
+        if (! Str::isUuid($batchId)) {
+            throw new RuntimeException('Batch not found.');
+        }
+
+        $jobs = DownloadJob::query()
+            ->where('batch_id', $batchId)
+            ->whereIn('status', ['queued', 'processing'])
+            ->get();
+
+        if ($jobs->isEmpty() && ! DownloadJob::query()->where('batch_id', $batchId)->exists()) {
+            throw new RuntimeException('Batch not found.');
+        }
+
+        foreach ($jobs as $job) {
+            $this->cancel($job->id);
+        }
+
+        $batch = $this->batchStatus($batchId);
+        if ($batch === null) {
+            throw new RuntimeException('Batch not found.');
+        }
+
+        return $batch;
+    }
+
     public function run(DownloadJob $job): DownloadJob
     {
+        $job->refresh();
+        if ($this->isCancelled($job)) {
+            return $this->markCancelled($job);
+        }
+
         $outdir = $this->jobDirectory($job->id);
         $progressFile = $outdir.'/progress.json';
         $resultFile = $outdir.'/result.json';
@@ -214,11 +295,25 @@ class YouTubeDownloadService
         File::ensureDirectoryExists($outdir);
         File::put($progressFile, json_encode(['status' => 'starting', 'percent' => 0]));
 
-        $job->update([
-            'status' => 'processing',
-            'progress' => 0,
-            'error_message' => null,
-        ]);
+        // Claim only if still queued — never overwrite a cancel.
+        $claimed = DownloadJob::query()
+            ->where('id', $job->id)
+            ->where('status', 'queued')
+            ->update([
+                'status' => 'processing',
+                'progress' => 0,
+                'error_message' => null,
+                'updated_at' => now(),
+            ]);
+
+        $job->refresh();
+        if ($this->isCancelled($job)) {
+            return $this->markCancelled($job);
+        }
+        if ($claimed === 0) {
+            // Another worker owns it, or it already finished.
+            return $job;
+        }
 
         $command = [
             $this->resolvePython(),
@@ -238,11 +333,25 @@ class YouTubeDownloadService
             $resultFile,
         ];
 
+        if ($job->trim_end !== null) {
+            $command[] = '--start';
+            $command[] = (string) ($job->trim_start ?? 0);
+            $command[] = '--end';
+            $command[] = (string) $job->trim_end;
+        }
+
         $process = Process::timeout((int) config('downloader.timeout', 600))
             ->env($this->processEnv())
             ->start($command);
 
         while ($process->running()) {
+            if ($this->isCancelled($job)) {
+                $this->stopProcess($process);
+                $this->cleanupPartialFiles($outdir);
+
+                return $this->markCancelled($job);
+            }
+
             $this->syncProgress($job, $progressFile);
             usleep(400000);
         }
@@ -250,13 +359,23 @@ class YouTubeDownloadService
         $this->syncProgress($job, $progressFile);
         $result = $process->wait();
 
+        if ($this->isCancelled($job)) {
+            $this->cleanupPartialFiles($outdir);
+
+            return $this->markCancelled($job);
+        }
+
         if (! $result->successful()) {
             $stderr = trim($result->errorOutput() ?: $result->output());
-            $job->update([
-                'status' => 'failed',
-                'progress' => (float) $job->progress,
-                'error_message' => $stderr !== '' ? $this->cleanError($stderr) : 'Download failed.',
-            ]);
+            DownloadJob::query()
+                ->where('id', $job->id)
+                ->whereIn('status', ['queued', 'processing'])
+                ->update([
+                    'status' => 'failed',
+                    'progress' => (float) $job->progress,
+                    'error_message' => $stderr !== '' ? $this->cleanError($stderr) : 'Download failed.',
+                    'updated_at' => now(),
+                ]);
 
             return $job->fresh();
         }
@@ -266,32 +385,53 @@ class YouTubeDownloadService
             ? json_decode(File::get($resultFile), true)
             : null;
 
+        if ($this->isCancelled($job)) {
+            $this->cleanupPartialFiles($outdir);
+
+            return $this->markCancelled($job);
+        }
+
         if ($file === null) {
-            $job->update([
-                'status' => 'failed',
-                'error_message' => 'Download finished but no output file was found.',
-            ]);
+            DownloadJob::query()
+                ->where('id', $job->id)
+                ->whereIn('status', ['queued', 'processing'])
+                ->update([
+                    'status' => 'failed',
+                    'error_message' => 'Download finished but no output file was found.',
+                    'updated_at' => now(),
+                ]);
 
             return $job->fresh();
         }
 
-        $job->update([
-            'status' => 'completed',
-            'progress' => 100,
-            'filename' => is_array($meta) && ! empty($meta['filename'])
-                ? $meta['filename']
-                : $file->getFilename(),
-            'extension' => is_array($meta) && ! empty($meta['extension'])
-                ? $meta['extension']
-                : $file->getExtension(),
-            'size' => is_array($meta) && isset($meta['size'])
-                ? (int) $meta['size']
-                : $file->getSize(),
-            'title' => $job->title ?: $this->titleFromFilename($file->getFilename()),
-            'error_message' => null,
-        ]);
+        DownloadJob::query()
+            ->where('id', $job->id)
+            ->whereIn('status', ['queued', 'processing'])
+            ->update([
+                'status' => 'completed',
+                'progress' => 100,
+                'filename' => is_array($meta) && ! empty($meta['filename'])
+                    ? $meta['filename']
+                    : $file->getFilename(),
+                'extension' => is_array($meta) && ! empty($meta['extension'])
+                    ? $meta['extension']
+                    : $file->getExtension(),
+                'size' => is_array($meta) && isset($meta['size'])
+                    ? (int) $meta['size']
+                    : $file->getSize(),
+                'title' => $job->title ?: $this->titleFromFilename($file->getFilename()),
+                'error_message' => null,
+                'updated_at' => now(),
+            ]);
 
-        return $job->fresh();
+        $job->refresh();
+        if ($job->status !== 'completed' && $this->isCancelled($job)) {
+            $this->cleanupPartialFiles($outdir);
+
+            return $this->markCancelled($job);
+        }
+
+        return $job;
     }
 
     public function resolveFile(string $id): ?\SplFileInfo
@@ -324,6 +464,10 @@ class YouTubeDownloadService
 
     private function syncProgress(DownloadJob $job, string $progressFile): void
     {
+        if ($this->hasCancelFlag($job->id)) {
+            return;
+        }
+
         if (! File::exists($progressFile)) {
             return;
         }
@@ -338,11 +482,18 @@ class YouTubeDownloadService
             return;
         }
 
-        $job->progress = max((float) $job->progress, min(99.0, $percent));
-        if ($job->status === 'queued') {
-            $job->status = 'processing';
-        }
-        $job->save();
+        $next = max((float) $job->progress, min(99.0, $percent));
+
+        DownloadJob::query()
+            ->where('id', $job->id)
+            ->whereIn('status', ['queued', 'processing'])
+            ->update([
+                'progress' => $next,
+                'status' => 'processing',
+                'updated_at' => now(),
+            ]);
+
+        $job->refresh();
     }
 
     private function scriptPath(): string
@@ -422,7 +573,7 @@ class YouTubeDownloadService
                 $name = $file->getFilename();
 
                 return ! str_ends_with($name, '.part')
-                    && ! in_array($name, ['progress.json', 'result.json'], true)
+                    && ! in_array($name, ['progress.json', 'result.json', 'cancel.flag'], true)
                     && ! str_ends_with($name, '.json.tmp');
             })
             ->sortByDesc(fn ($file) => $file->getSize())
@@ -445,5 +596,92 @@ class YouTubeDownloadService
         $lines = array_values(array_filter(array_map('trim', explode("\n", $message))));
 
         return $lines[0] ?? 'Download failed.';
+    }
+
+    private function cancelFlagPath(string $id): string
+    {
+        return $this->jobDirectory($id).'/cancel.flag';
+    }
+
+    private function hasCancelFlag(string $id): bool
+    {
+        return File::exists($this->cancelFlagPath($id));
+    }
+
+    private function isCancelled(DownloadJob $job): bool
+    {
+        $job->refresh();
+
+        return $job->status === 'cancelled' || $this->hasCancelFlag($job->id);
+    }
+
+    private function markCancelled(DownloadJob $job): DownloadJob
+    {
+        DownloadJob::query()
+            ->where('id', $job->id)
+            ->whereNotIn('status', ['completed'])
+            ->update([
+                'status' => 'cancelled',
+                'error_message' => 'Cancelled by user.',
+                'updated_at' => now(),
+            ]);
+
+        return $job->fresh();
+    }
+
+    private function stopProcess(mixed $process): void
+    {
+        try {
+            if (method_exists($process, 'signal')) {
+                $process->signal(defined('SIGTERM') ? SIGTERM : 15);
+            }
+        } catch (\Throwable) {
+            // Continue with stronger stop attempts.
+        }
+
+        usleep(300000);
+
+        try {
+            if (method_exists($process, 'running') && $process->running()) {
+                if (method_exists($process, 'signal')) {
+                    $process->signal(defined('SIGKILL') ? SIGKILL : 9);
+                }
+            }
+        } catch (\Throwable) {
+            // Best-effort kill.
+        }
+
+        // Kill process group / children when available.
+        try {
+            $pid = method_exists($process, 'id') ? $process->id() : null;
+            if (is_int($pid) && $pid > 1 && function_exists('posix_kill')) {
+                @posix_kill(-$pid, defined('SIGKILL') ? SIGKILL : 9);
+                @posix_kill($pid, defined('SIGKILL') ? SIGKILL : 9);
+            }
+        } catch (\Throwable) {
+            // Best-effort kill.
+        }
+    }
+
+    private function cleanupPartialFiles(string $outdir): void
+    {
+        if (! File::isDirectory($outdir)) {
+            return;
+        }
+
+        foreach (File::files($outdir) as $file) {
+            $name = $file->getFilename();
+            if (
+                str_ends_with($name, '.part')
+                || (! in_array($name, ['progress.json', 'result.json', 'cancel.flag'], true)
+                    && ! str_ends_with($name, '.json.tmp'))
+            ) {
+                // Keep cancel/progress markers; remove media and partials.
+                if (in_array($name, ['progress.json', 'result.json', 'cancel.flag'], true)) {
+                    continue;
+                }
+                File::delete($file->getPathname());
+            }
+        }
     }
 }

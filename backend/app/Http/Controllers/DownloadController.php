@@ -53,6 +53,14 @@ class DownloadController extends ApiController
                 $this->resolveFormat($validated),
                 $validated['codec'] ?? 'compatible',
                 $preview !== [] ? $preview : null,
+                null,
+                null,
+                isset($validated['trim_end'])
+                    ? (isset($validated['trim_start']) ? (float) $validated['trim_start'] : 0.0)
+                    : null,
+                isset($validated['trim_end']) ? (float) $validated['trim_end'] : null,
+                $request->ip(),
+                $request->userAgent(),
             );
 
             ProcessYouTubeDownload::dispatch($job->id);
@@ -79,6 +87,8 @@ class DownloadController extends ApiController
                 $validated['quality'] ?? 'best',
                 $this->resolveFormat($validated),
                 $validated['codec'] ?? 'compatible',
+                $request->ip(),
+                $request->userAgent(),
             );
 
             foreach ($result['jobs'] as $job) {
@@ -126,6 +136,46 @@ class DownloadController extends ApiController
 
         return $this->successResponser([
             'data' => $job->toApiArray(),
+        ]);
+    }
+
+    public function cancel(string $id): JsonResponse
+    {
+        try {
+            $job = $this->downloads->cancel($id);
+        } catch (RuntimeException $e) {
+            $code = str_contains(strtolower($e->getMessage()), 'not found') ? 404 : 422;
+
+            return $this->errorResponse($e->getMessage(), $code);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return $this->errorResponse('Could not cancel download.', 500);
+        }
+
+        return $this->successResponser([
+            'message' => 'Download cancelled.',
+            'data' => $job->toApiArray(),
+        ]);
+    }
+
+    public function cancelBatch(string $id): JsonResponse
+    {
+        try {
+            $batch = $this->downloads->cancelBatch($id);
+        } catch (RuntimeException $e) {
+            $code = str_contains(strtolower($e->getMessage()), 'not found') ? 404 : 422;
+
+            return $this->errorResponse($e->getMessage(), $code);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return $this->errorResponse('Could not cancel batch.', 500);
+        }
+
+        return $this->successResponser([
+            'message' => 'Batch cancelled.',
+            'data' => $batch,
         ]);
     }
 

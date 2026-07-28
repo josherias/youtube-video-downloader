@@ -12,6 +12,8 @@ import toast from "react-hot-toast";
 import {
   createBatchDownload,
   createDownload,
+  cancelBatch,
+  cancelDownload,
   formatBytes,
   getBatchStatus,
   getDownloadFileUrl,
@@ -67,6 +69,8 @@ function statusLabel(status) {
       return "Partial";
     case "failed":
       return "Failed";
+    case "cancelled":
+      return "Cancelled";
     default:
       return status;
   }
@@ -74,6 +78,33 @@ function statusLabel(status) {
 
 function entryKey(entry, index) {
   return entry.id || entry.webpage_url || String(index);
+}
+
+function parseTimestamp(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text);
+  const parts = text.split(":").map((part) => Number(part));
+  if (parts.some((part) => Number.isNaN(part))) {
+    throw new Error("Use seconds or MM:SS / HH:MM:SS");
+  }
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 1) return parts[0];
+  throw new Error("Use seconds or MM:SS / HH:MM:SS");
+}
+
+function formatTimestamp(seconds) {
+  if (seconds == null) return "";
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 export default function Home() {
@@ -88,19 +119,23 @@ export default function Home() {
   const [quality, setQuality] = useState("best");
   const [format, setFormat] = useState("mp4");
   const [codec, setCodec] = useState("compatible");
+  const [clipEnabled, setClipEnabled] = useState(false);
+  const [trimStart, setTrimStart] = useState("0:00");
+  const [trimEnd, setTrimEnd] = useState("");
+  const [sharing, setSharing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const pollRef = useRef(null);
 
   const urlValue = Form.useWatch("url", form);
   const isPlaylist = preview?.type === "playlist";
   const isAudioFormat = format === "mp3" || format === "m4a";
+  const canShare =
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function";
 
   const helper = useMemo(() => {
-    if (format === "mp3") {
-      return "Audio-only MP3 export.";
-    }
-    if (format === "m4a") {
-      return "Audio-only M4A/AAC export.";
-    }
+    if (format === "mp3") return "Audio-only MP3 export.";
+    if (format === "m4a") return "Audio-only M4A/AAC export.";
     if (format === "webm") {
       return codec === "compatible"
         ? "WebM with VP9 + Opus when available."
@@ -131,8 +166,17 @@ export default function Home() {
     setJob(null);
     setBatch(null);
     setError("");
+    setClipEnabled(false);
+    setTrimStart("0:00");
+    setTrimEnd("");
     stopPolling();
   }, [urlValue]);
+
+  useEffect(() => {
+    if (preview?.type === "video" && preview.duration && !trimEnd) {
+      setTrimEnd(formatTimestamp(preview.duration));
+    }
+  }, [preview, trimEnd]);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -156,6 +200,9 @@ export default function Home() {
           stopPolling();
           setError(next.error_message || "Download failed.");
           toast.error(next.error_message || "Download failed.");
+        } else if (next.status === "cancelled") {
+          stopPolling();
+          toast("Download cancelled");
         }
       } catch (err) {
         stopPolling();
@@ -186,6 +233,9 @@ export default function Home() {
           stopPolling();
           setError("All videos in this batch failed.");
           toast.error("Batch failed");
+        } else if (next.status === "cancelled") {
+          stopPolling();
+          toast("Batch cancelled");
         }
       } catch (err) {
         stopPolling();
@@ -285,6 +335,22 @@ export default function Home() {
         format,
         codec,
         preview,
+        ...(clipEnabled && !isPlaylist
+          ? (() => {
+              const start = parseTimestamp(trimStart) ?? 0;
+              const end = parseTimestamp(trimEnd);
+              if (end == null) {
+                throw new Error("Enter a clip end time.");
+              }
+              if (end <= start) {
+                throw new Error("Clip end must be after start.");
+              }
+              if (preview?.duration && end > preview.duration) {
+                throw new Error("Clip end is past the video duration.");
+              }
+              return { trimStart: start, trimEnd: end };
+            })()
+          : {}),
       });
 
       const payload = response?.data;
@@ -317,22 +383,91 @@ export default function Home() {
     setSelectedKeys(checked ? (preview.entries || []).map(entryKey) : []);
   };
 
+  const shareJob = async (item) => {
+    const url = getDownloadFileUrl(item.id);
+    setSharing(true);
+    try {
+      if (canShare) {
+        await navigator.share({
+          title: item.title || "TubeGrab download",
+          text: item.title || "Downloaded with TubeGrab",
+          url,
+        });
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        toast.success("Download link copied");
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch (err) {
+      if (err?.name !== "AbortError") {
+        toast.error("Could not share link");
+      }
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const onCancelJob = async () => {
+    if (!job?.id) return;
+    setCancelling(true);
+    try {
+      const response = await cancelDownload(job.id);
+      const payload = response?.data;
+      if (payload) setJob(payload);
+      stopPolling();
+      toast("Download cancelled");
+    } catch (err) {
+      toast.error(
+        err?.response?.data?.error || err?.message || "Could not cancel"
+      );
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const onCancelBatch = async () => {
+    if (!batch?.id) return;
+    setCancelling(true);
+    try {
+      const response = await cancelBatch(batch.id);
+      const payload = response?.data;
+      if (payload) setBatch(payload);
+      stopPolling();
+      toast("Batch cancelled");
+    } catch (err) {
+      toast.error(
+        err?.response?.data?.error || err?.message || "Could not cancel batch"
+      );
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const downloadLabel = queueLoading
+    ? "Starting…"
+    : isPlaylist
+      ? `Download (${selectedEntries.length})`
+      : clipEnabled
+        ? "Download clip"
+        : "Download";
+
   return (
     <ConfigProvider theme={antTheme}>
-      <section className="mx-auto grid max-w-5xl gap-10 lg:grid-cols-[1fr_1.05fr] lg:items-start lg:gap-14">
-        <div className="animate-rise max-w-xl lg:sticky lg:top-10">
-          <h1 className="brand-mark font-display text-[clamp(3.4rem,8vw,5.6rem)] leading-[0.92] text-ink">
+      <section className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-[0.95fr_1.05fr] lg:items-start lg:gap-14">
+        <div className="animate-rise order-2 max-w-xl lg:order-1 lg:sticky lg:top-10">
+          <h1 className="brand-mark font-display text-[clamp(2.8rem,12vw,5.6rem)] leading-[0.92] text-ink">
             Tube<span className="text-accent">Grab</span>
           </h1>
 
-          <p className="mt-5 max-w-md text-lg leading-relaxed text-muted sm:text-xl">
-            Preview a video or playlist, pick what you want, then download with
-            live progress.
+          <p className="mt-4 max-w-md text-base leading-relaxed text-muted sm:mt-5 sm:text-xl">
+            Preview, clip, and download clean files — built for phone and
+            desktop.
           </p>
         </div>
 
-        <div className="animate-rise-delay panel rounded-[1.6rem] p-6 sm:p-8">
-          <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="animate-rise-delay panel order-1 rounded-[1.35rem] p-4 sm:rounded-[1.6rem] sm:p-8 lg:order-2">
+          <div className="mb-5 flex items-start justify-between gap-4 sm:mb-6">
             <div>
               <h2 className="text-lg font-semibold text-ink">New download</h2>
               <p className="mt-1 text-sm text-muted">
@@ -363,13 +498,15 @@ export default function Home() {
               <Input
                 className="tg-input"
                 size="large"
-                placeholder="https://www.youtube.com/playlist?list=..."
+                inputMode="url"
+                enterKeyHint="go"
+                placeholder="Paste YouTube link"
                 allowClear
                 disabled={isBusy}
               />
             </Form.Item>
 
-            <div className="mb-5 grid grid-cols-2 gap-3">
+            <div className="mb-5 hidden grid-cols-2 gap-3 sm:grid">
               <Button
                 className="tg-secondary"
                 size="large"
@@ -389,11 +526,7 @@ export default function Home() {
                 disabled={isBusy && !queueLoading}
                 block
               >
-                {queueLoading
-                  ? "Starting…"
-                  : isPlaylist
-                    ? `Download (${selectedEntries.length})`
-                    : "Download"}
+                {downloadLabel}
               </Button>
             </div>
 
@@ -401,7 +534,7 @@ export default function Home() {
               <label className="mb-2 block text-sm font-medium text-ink-soft">
                 Format
               </label>
-              <div className="quality-group" role="radiogroup" aria-label="Format">
+              <div className="option-group-mobile" role="radiogroup" aria-label="Format">
                 {FORMAT_OPTIONS.map((option) => {
                   const active = format === option.value;
                   return (
@@ -424,11 +557,7 @@ export default function Home() {
               <label className="mb-2 block text-sm font-medium text-ink-soft">
                 Codec
               </label>
-              <div
-                className="option-group-2"
-                role="radiogroup"
-                aria-label="Codec"
-              >
+              <div className="option-group-2" role="radiogroup" aria-label="Codec">
                 {CODEC_OPTIONS.map((option) => {
                   const active = codec === option.value;
                   return (
@@ -451,7 +580,7 @@ export default function Home() {
               <label className="mb-2 block text-sm font-medium text-ink-soft">
                 Quality
               </label>
-              <div className="quality-group" role="radiogroup" aria-label="Quality">
+              <div className="option-group-mobile" role="radiogroup" aria-label="Quality">
                 {QUALITY_OPTIONS.map((option) => {
                   const active = quality === option.value;
                   return (
@@ -469,6 +598,78 @@ export default function Home() {
                 })}
               </div>
             </div>
+
+            {!isPlaylist ? (
+              <div className="mb-5 rounded-2xl border border-line bg-panel/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-ink">Trim / clip</p>
+                    <p className="text-xs text-muted">
+                      Download only part of the video
+                      {preview?.duration_string
+                        ? ` · ${preview.duration_string} total`
+                        : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`clip-toggle ${clipEnabled ? "is-on" : ""}`}
+                    aria-pressed={clipEnabled}
+                    disabled={isBusy}
+                    onClick={() => {
+                      setClipEnabled((value) => {
+                        const next = !value;
+                        if (
+                          next &&
+                          !trimEnd &&
+                          preview?.type === "video" &&
+                          preview.duration
+                        ) {
+                          setTrimEnd(formatTimestamp(preview.duration));
+                        }
+                        return next;
+                      });
+                    }}
+                  >
+                    {clipEnabled ? "On" : "Off"}
+                  </button>
+                </div>
+
+                {clipEnabled ? (
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-muted">
+                        Start
+                      </span>
+                      <Input
+                        className="tg-input"
+                        value={trimStart}
+                        disabled={isBusy}
+                        placeholder="0:00"
+                        inputMode="numeric"
+                        onChange={(e) => setTrimStart(e.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-medium text-muted">
+                        End
+                      </span>
+                      <Input
+                        className="tg-input"
+                        value={trimEnd}
+                        disabled={isBusy}
+                        placeholder="1:30"
+                        inputMode="numeric"
+                        onChange={(e) => setTrimEnd(e.target.value)}
+                      />
+                    </label>
+                    <p className="col-span-2 text-xs text-muted">
+                      Use seconds or MM:SS / HH:MM:SS.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <p className="mb-2 text-xs leading-relaxed text-muted">{helper}</p>
           </Form>
@@ -543,7 +744,7 @@ export default function Home() {
                   return (
                     <label
                       key={key}
-                      className="flex cursor-pointer items-center gap-3 rounded-xl border border-line px-3 py-2 hover:bg-panel/60"
+                      className="flex min-h-[64px] cursor-pointer items-center gap-3 rounded-xl border border-line px-3 py-3 hover:bg-panel/60 active:bg-panel"
                     >
                       <Checkbox
                         checked={selectedKeys.includes(key)}
@@ -625,23 +826,57 @@ export default function Home() {
                 {job.title || preview?.title || "Preparing download…"}
               </p>
 
+              {(job.status === "queued" || job.status === "processing") && (
+                <Button
+                  className="tg-cancel mt-4"
+                  danger
+                  size="large"
+                  loading={cancelling}
+                  onClick={onCancelJob}
+                  block
+                >
+                  Cancel download
+                </Button>
+              )}
+
+              {job.status === "cancelled" ? (
+                <p className="mt-2 text-sm text-muted">
+                  {job.error_message || "Cancelled by user."}
+                </p>
+              ) : null}
+
               {job.status === "completed" ? (
                 <>
                   <p className="mt-1 truncate text-sm text-muted">
                     {job.extension?.toUpperCase() || "FILE"}
                     {job.size ? ` · ${formatBytes(job.size)}` : ""}
+                    {job.trim_end != null
+                      ? ` · clip ${formatTimestamp(job.trim_start || 0)}–${formatTimestamp(job.trim_end)}`
+                      : ""}
                   </p>
-                  <Button
-                    className="tg-secondary mt-4"
-                    type="default"
-                    size="large"
-                    href={getDownloadFileUrl(job.id)}
-                    target="_blank"
-                    rel="noreferrer"
-                    block
-                  >
-                    Save file
-                  </Button>
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Button
+                      className="tg-secondary"
+                      type="default"
+                      size="large"
+                      href={getDownloadFileUrl(job.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      block
+                    >
+                      Save file
+                    </Button>
+                    <Button
+                      className="tg-secondary"
+                      type="default"
+                      size="large"
+                      loading={sharing}
+                      onClick={() => shareJob(job)}
+                      block
+                    >
+                      {canShare ? "Share" : "Copy link"}
+                    </Button>
+                  </div>
                 </>
               ) : null}
 
@@ -670,6 +905,19 @@ export default function Home() {
                 trailColor="#e4e6eb"
               />
 
+              {(batch.status === "queued" || batch.status === "processing") && (
+                <Button
+                  className="tg-cancel mt-4"
+                  danger
+                  size="large"
+                  loading={cancelling}
+                  onClick={onCancelBatch}
+                  block
+                >
+                  Cancel batch
+                </Button>
+              )}
+
               <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
                 {(batch.jobs || []).map((item) => (
                   <div
@@ -693,14 +941,23 @@ export default function Home() {
                         </p>
                       </div>
                       {item.status === "completed" ? (
-                        <a
-                          className="shrink-0 text-sm font-semibold text-accent hover:underline"
-                          href={getDownloadFileUrl(item.id)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Save
-                        </a>
+                        <div className="flex shrink-0 gap-3">
+                          <a
+                            className="text-sm font-semibold text-accent hover:underline"
+                            href={getDownloadFileUrl(item.id)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Save
+                          </a>
+                          <button
+                            type="button"
+                            className="text-sm font-semibold text-ink-soft hover:underline"
+                            onClick={() => shareJob(item)}
+                          >
+                            {canShare ? "Share" : "Copy"}
+                          </button>
+                        </div>
                       ) : null}
                     </div>
                     {(item.status === "queued" ||
@@ -734,6 +991,30 @@ export default function Home() {
           ) : null}
         </div>
       </section>
+
+      <div className="mobile-action-bar sm:hidden">
+        <Button
+          className="tg-secondary"
+          size="large"
+          onClick={onPreview}
+          loading={previewLoading}
+          disabled={isBusy && !previewLoading}
+          block
+        >
+          Preview
+        </Button>
+        <Button
+          className="tg-primary"
+          type="primary"
+          size="large"
+          loading={queueLoading}
+          disabled={isBusy && !queueLoading}
+          onClick={() => form.submit()}
+          block
+        >
+          {downloadLabel}
+        </Button>
+      </div>
     </ConfigProvider>
   );
 }

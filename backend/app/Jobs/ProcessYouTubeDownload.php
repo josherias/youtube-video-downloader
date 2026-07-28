@@ -21,7 +21,7 @@ class ProcessYouTubeDownload implements ShouldQueue
     public function handle(YouTubeDownloadService $downloads): void
     {
         $job = DownloadJob::query()->find($this->downloadJobId);
-        if (! $job || in_array($job->status, ['completed', 'failed'], true)) {
+        if (! $job || in_array($job->status, ['completed', 'failed', 'cancelled'], true)) {
             return;
         }
 
@@ -31,7 +31,7 @@ class ProcessYouTubeDownload implements ShouldQueue
     public function failed(?Throwable $exception): void
     {
         $job = DownloadJob::query()->find($this->downloadJobId);
-        if (! $job || $job->status === 'completed') {
+        if (! $job || in_array($job->status, ['completed', 'cancelled'], true)) {
             return;
         }
 

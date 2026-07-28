@@ -15,6 +15,8 @@ export async function createDownload({
   quality = "best",
   format = "mp4",
   codec = "compatible",
+  trimStart = null,
+  trimEnd = null,
   preview = null,
 }) {
   const { data } = await axiosClient.post(
@@ -24,6 +26,12 @@ export async function createDownload({
       quality,
       format,
       codec,
+      ...(trimEnd != null
+        ? {
+            trim_start: trimStart ?? 0,
+            trim_end: trimEnd,
+          }
+        : {}),
       ...(preview
         ? {
             title: preview.title,
@@ -76,6 +84,24 @@ export async function getBatchStatus(id) {
   const { data } = await axiosClient.get(`/batches/${id}`, {
     __skipAuth: true,
   });
+  return data;
+}
+
+export async function cancelDownload(id) {
+  const { data } = await axiosClient.post(
+    `/downloads/${id}/cancel`,
+    {},
+    { __skipAuth: true }
+  );
+  return data;
+}
+
+export async function cancelBatch(id) {
+  const { data } = await axiosClient.post(
+    `/batches/${id}/cancel`,
+    {},
+    { __skipAuth: true }
+  );
   return data;
 }
 
