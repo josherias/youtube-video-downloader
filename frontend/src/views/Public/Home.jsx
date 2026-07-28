@@ -452,547 +452,534 @@ export default function Home() {
         ? "Download clip"
         : "Download";
 
+  const OptionGroup = ({ label, options, value, onChange, disabled, cols }) => (
+    <div className="home-field">
+      <p className="home-field-label">{label}</p>
+      <div
+        className={`home-segment ${cols === 2 ? "home-segment--2" : "home-segment--4"}`}
+        role="radiogroup"
+        aria-label={label}
+      >
+        {options.map((option) => {
+          const active = value === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              className={`home-chip ${active ? "is-active" : ""}`}
+              disabled={disabled}
+              aria-pressed={active}
+              onClick={() => onChange(option.value)}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <ConfigProvider theme={antTheme}>
-      <section className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-[0.95fr_1.05fr] lg:items-start lg:gap-14">
-        <div className="animate-rise order-2 max-w-xl lg:order-1 lg:sticky lg:top-10">
-          <h1 className="brand-mark font-display text-[clamp(2.8rem,12vw,5.6rem)] leading-[0.92] text-ink">
+      <section className="home-layout">
+        <aside className="home-intro animate-rise order-2 lg:order-1">
+          <p className="home-kicker">Personal media tool</p>
+          <h1 className="brand-mark home-hero-title">
             Tube<span className="text-accent">Grab</span>
           </h1>
-
-          <p className="mt-4 max-w-md text-base leading-relaxed text-muted sm:mt-5 sm:text-xl">
-            Preview, clip, and download clean files — built for phone and
-            desktop.
+          <p className="home-hero-copy">
+            Paste a YouTube link, preview it, then grab a clean file — or clip
+            just the part you need.
           </p>
-        </div>
 
-        <div className="animate-rise-delay panel order-1 rounded-[1.35rem] p-4 sm:rounded-[1.6rem] sm:p-8 lg:order-2">
-          <div className="mb-5 flex items-start justify-between gap-4 sm:mb-6">
-            <div>
-              <h2 className="text-lg font-semibold text-ink">New download</h2>
-              <p className="mt-1 text-sm text-muted">
-                Video, playlist, or youtu.be links.
-              </p>
+          <ul className="home-points">
+            <li>
+              <strong>Video & audio</strong>
+              <span>MP4, WebM, MP3, M4A</span>
+            </li>
+            <li>
+              <strong>Playlists</strong>
+              <span>Pick what you want</span>
+            </li>
+            <li>
+              <strong>Trim clips</strong>
+              <span>Start and end times</span>
+            </li>
+          </ul>
+        </aside>
+
+        <div className="home-workspace animate-rise-delay order-1 lg:order-2">
+          <div className="home-panel">
+            <div className="home-panel-head">
+              <div>
+                <h2 className="home-panel-title">New download</h2>
+                <p className="home-panel-sub">
+                  Video, playlist, or youtu.be links
+                </p>
+              </div>
+              {isBusy ? (
+                <span className="home-working">
+                  <span className="loading-dot" aria-hidden />
+                  Working
+                </span>
+              ) : null}
             </div>
-            {isBusy ? (
-              <span className="loading-dot mt-1 text-xs font-medium uppercase tracking-[0.16em] text-accent">
-                Working
-              </span>
-            ) : null}
-          </div>
 
-          <Form
-            form={form}
-            layout="vertical"
-            requiredMark={false}
-            onFinish={onFinish}
-          >
-            <Form.Item
-              label="YouTube URL"
-              name="url"
-              rules={[
-                { required: true, message: "Paste a YouTube URL" },
-                { type: "url", message: "Enter a valid URL" },
-              ]}
+            <Form
+              form={form}
+              layout="vertical"
+              requiredMark={false}
+              onFinish={onFinish}
+              className="home-form"
             >
-              <Input
-                className="tg-input"
-                size="large"
-                inputMode="url"
-                enterKeyHint="go"
-                placeholder="Paste YouTube link"
-                allowClear
-                disabled={isBusy}
-              />
-            </Form.Item>
-
-            <div className="mb-5 hidden grid-cols-2 gap-3 sm:grid">
-              <Button
-                className="tg-secondary"
-                size="large"
-                onClick={onPreview}
-                loading={previewLoading}
-                disabled={isBusy && !previewLoading}
-                block
+              <Form.Item
+                label="YouTube URL"
+                name="url"
+                rules={[
+                  { required: true, message: "Paste a YouTube URL" },
+                  { type: "url", message: "Enter a valid URL" },
+                ]}
               >
-                Preview
-              </Button>
-              <Button
-                className="tg-primary"
-                type="primary"
-                htmlType="submit"
-                size="large"
-                loading={queueLoading}
-                disabled={isBusy && !queueLoading}
-                block
-              >
-                {downloadLabel}
-              </Button>
-            </div>
+                <Input
+                  className="tg-input"
+                  size="large"
+                  inputMode="url"
+                  enterKeyHint="go"
+                  placeholder="https://youtube.com/watch?v=…"
+                  allowClear
+                  disabled={isBusy}
+                />
+              </Form.Item>
 
-            <div className="mb-5">
-              <label className="mb-2 block text-sm font-medium text-ink-soft">
-                Format
-              </label>
-              <div className="option-group-mobile" role="radiogroup" aria-label="Format">
-                {FORMAT_OPTIONS.map((option) => {
-                  const active = format === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={`quality-btn ${active ? "is-active" : ""}`}
-                      disabled={isBusy}
-                      aria-pressed={active}
-                      onClick={() => setFormat(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
+              <div className="home-actions mb-6 hidden sm:grid">
+                <Button
+                  className="tg-secondary"
+                  size="large"
+                  onClick={onPreview}
+                  loading={previewLoading}
+                  disabled={isBusy && !previewLoading}
+                  block
+                >
+                  Preview
+                </Button>
+                <Button
+                  className="tg-primary"
+                  type="primary"
+                  htmlType="submit"
+                  size="large"
+                  loading={queueLoading}
+                  disabled={isBusy && !queueLoading}
+                  block
+                >
+                  {downloadLabel}
+                </Button>
               </div>
-            </div>
 
-            <div className="mb-5">
-              <label className="mb-2 block text-sm font-medium text-ink-soft">
-                Codec
-              </label>
-              <div className="option-group-2" role="radiogroup" aria-label="Codec">
-                {CODEC_OPTIONS.map((option) => {
-                  const active = codec === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={`quality-btn ${active ? "is-active" : ""}`}
-                      disabled={isBusy}
-                      aria-pressed={active}
-                      onClick={() => setCodec(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mb-5">
-              <label className="mb-2 block text-sm font-medium text-ink-soft">
-                Quality
-              </label>
-              <div className="option-group-mobile" role="radiogroup" aria-label="Quality">
-                {QUALITY_OPTIONS.map((option) => {
-                  const active = quality === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={`quality-btn ${active ? "is-active" : ""}`}
-                      disabled={isAudioFormat || isBusy}
-                      aria-pressed={active}
-                      onClick={() => setQuality(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {!isPlaylist ? (
-              <div className="mb-5 rounded-2xl border border-line bg-panel/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink">Trim / clip</p>
-                    <p className="text-xs text-muted">
-                      Download only part of the video
-                      {preview?.duration_string
-                        ? ` · ${preview.duration_string} total`
-                        : ""}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className={`clip-toggle ${clipEnabled ? "is-on" : ""}`}
-                    aria-pressed={clipEnabled}
-                    disabled={isBusy}
-                    onClick={() => {
-                      setClipEnabled((value) => {
-                        const next = !value;
-                        if (
-                          next &&
-                          !trimEnd &&
-                          preview?.type === "video" &&
-                          preview.duration
-                        ) {
-                          setTrimEnd(formatTimestamp(preview.duration));
-                        }
-                        return next;
-                      });
-                    }}
-                  >
-                    {clipEnabled ? "On" : "Off"}
-                  </button>
+              <div className="home-settings">
+                <div className="home-settings-head">
+                  <p className="home-settings-title">Output</p>
+                  <p className="home-settings-hint">{helper}</p>
                 </div>
 
-                {clipEnabled ? (
-                  <div className="mt-4 grid grid-cols-2 gap-3">
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium text-muted">
-                        Start
-                      </span>
-                      <Input
-                        className="tg-input"
-                        value={trimStart}
-                        disabled={isBusy}
-                        placeholder="0:00"
-                        inputMode="numeric"
-                        onChange={(e) => setTrimStart(e.target.value)}
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium text-muted">
-                        End
-                      </span>
-                      <Input
-                        className="tg-input"
-                        value={trimEnd}
-                        disabled={isBusy}
-                        placeholder="1:30"
-                        inputMode="numeric"
-                        onChange={(e) => setTrimEnd(e.target.value)}
-                      />
-                    </label>
-                    <p className="col-span-2 text-xs text-muted">
-                      Use seconds or MM:SS / HH:MM:SS.
-                    </p>
-                  </div>
-                ) : null}
+                <OptionGroup
+                  label="Format"
+                  options={FORMAT_OPTIONS}
+                  value={format}
+                  onChange={setFormat}
+                  disabled={isBusy}
+                />
+                <OptionGroup
+                  label="Codec"
+                  options={CODEC_OPTIONS}
+                  value={codec}
+                  onChange={setCodec}
+                  disabled={isBusy}
+                  cols={2}
+                />
+                <OptionGroup
+                  label="Quality"
+                  options={QUALITY_OPTIONS}
+                  value={quality}
+                  onChange={setQuality}
+                  disabled={isAudioFormat || isBusy}
+                />
               </div>
-            ) : null}
 
-            <p className="mb-2 text-xs leading-relaxed text-muted">{helper}</p>
-          </Form>
+              {!isPlaylist ? (
+                <div className={`home-trim ${clipEnabled ? "is-open" : ""}`}>
+                  <div className="home-trim-row">
+                    <div>
+                      <p className="home-trim-title">Trim / clip</p>
+                      <p className="home-trim-sub">
+                        Download only part of the video
+                        {preview?.duration_string
+                          ? ` · ${preview.duration_string} total`
+                          : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className={`clip-toggle ${clipEnabled ? "is-on" : ""}`}
+                      aria-pressed={clipEnabled}
+                      disabled={isBusy}
+                      onClick={() => {
+                        setClipEnabled((value) => {
+                          const next = !value;
+                          if (
+                            next &&
+                            !trimEnd &&
+                            preview?.type === "video" &&
+                            preview.duration
+                          ) {
+                            setTrimEnd(formatTimestamp(preview.duration));
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      {clipEnabled ? "On" : "Off"}
+                    </button>
+                  </div>
 
-          {preview && !isPlaylist ? (
-            <div className="animate-fade mt-5 overflow-hidden rounded-2xl border border-line bg-white">
-              <div className="grid gap-0 sm:grid-cols-[140px_1fr]">
+                  {clipEnabled ? (
+                    <div className="home-trim-fields">
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-muted">
+                          Start
+                        </span>
+                        <Input
+                          className="tg-input"
+                          value={trimStart}
+                          disabled={isBusy}
+                          placeholder="0:00"
+                          inputMode="numeric"
+                          onChange={(e) => setTrimStart(e.target.value)}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-muted">
+                          End
+                        </span>
+                        <Input
+                          className="tg-input"
+                          value={trimEnd}
+                          disabled={isBusy}
+                          placeholder="1:30"
+                          inputMode="numeric"
+                          onChange={(e) => setTrimEnd(e.target.value)}
+                        />
+                      </label>
+                      <p className="col-span-2 text-xs text-muted">
+                        Use seconds or MM:SS / HH:MM:SS.
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </Form>
+
+            {preview && !isPlaylist ? (
+              <div className="home-preview animate-fade">
                 {preview.thumbnail ? (
                   <img
                     src={preview.thumbnail}
                     alt=""
-                    className="h-28 w-full object-cover sm:h-full"
+                    className="home-preview-thumb"
                   />
                 ) : (
-                  <div className="flex h-28 items-center justify-center bg-panel text-xs text-muted sm:h-full">
-                    No thumbnail
-                  </div>
+                  <div className="home-preview-placeholder">No thumbnail</div>
                 )}
-                <div className="min-w-0 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">
-                    Preview
-                  </p>
-                  <p className="mt-1 line-clamp-2 text-base font-semibold text-ink">
-                    {preview.title}
-                  </p>
-                  <p className="mt-2 text-sm text-muted">
+                <div className="home-preview-body">
+                  <p className="home-eyebrow">Preview</p>
+                  <p className="home-preview-title">{preview.title}</p>
+                  <p className="home-preview-meta">
                     {[preview.channel, preview.duration_string]
                       .filter(Boolean)
                       .join(" · ")}
                   </p>
                 </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          {isPlaylist ? (
-            <div className="animate-fade mt-5 rounded-2xl border border-line bg-white p-4">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">
-                    Playlist
-                  </p>
-                  <p className="mt-1 truncate text-base font-semibold text-ink">
-                    {preview.title}
-                  </p>
-                  <p className="mt-1 text-sm text-muted">
-                    {[preview.channel, `${preview.entry_count || 0} videos`]
-                      .filter(Boolean)
-                      .join(" · ")}
-                    {preview.truncated ? " · showing first items" : ""}
-                  </p>
+            {isPlaylist ? (
+              <div className="home-playlist animate-fade">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="home-eyebrow">Playlist</p>
+                    <p className="mt-1 truncate text-base font-semibold text-ink">
+                      {preview.title}
+                    </p>
+                    <p className="mt-1 text-sm text-muted">
+                      {[preview.channel, `${preview.entry_count || 0} videos`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      {preview.truncated ? " · showing first items" : ""}
+                    </p>
+                  </div>
+                  <Checkbox
+                    checked={
+                      selectedKeys.length > 0 &&
+                      selectedKeys.length === (preview.entries || []).length
+                    }
+                    indeterminate={
+                      selectedKeys.length > 0 &&
+                      selectedKeys.length < (preview.entries || []).length
+                    }
+                    onChange={(e) => toggleAll(e.target.checked)}
+                    disabled={isBusy}
+                  >
+                    All
+                  </Checkbox>
                 </div>
-                <Checkbox
-                  checked={
-                    selectedKeys.length > 0 &&
-                    selectedKeys.length === (preview.entries || []).length
-                  }
-                  indeterminate={
-                    selectedKeys.length > 0 &&
-                    selectedKeys.length < (preview.entries || []).length
-                  }
-                  onChange={(e) => toggleAll(e.target.checked)}
-                  disabled={isBusy}
-                >
-                  All
-                </Checkbox>
-              </div>
 
-              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                {(preview.entries || []).map((entry, index) => {
-                  const key = entryKey(entry, index);
-                  return (
-                    <label
-                      key={key}
-                      className="flex min-h-[64px] cursor-pointer items-center gap-3 rounded-xl border border-line px-3 py-3 hover:bg-panel/60 active:bg-panel"
-                    >
-                      <Checkbox
-                        checked={selectedKeys.includes(key)}
-                        disabled={isBusy}
-                        onChange={(e) => {
-                          setSelectedKeys((current) =>
-                            e.target.checked
-                              ? [...current, key]
-                              : current.filter((item) => item !== key)
-                          );
-                        }}
-                      />
-                      {entry.thumbnail ? (
-                        <img
-                          src={entry.thumbnail}
-                          alt=""
-                          className="h-12 w-20 rounded-md object-cover"
+                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {(preview.entries || []).map((entry, index) => {
+                    const key = entryKey(entry, index);
+                    return (
+                      <label key={key} className="home-playlist-item">
+                        <Checkbox
+                          checked={selectedKeys.includes(key)}
+                          disabled={isBusy}
+                          onChange={(e) => {
+                            setSelectedKeys((current) =>
+                              e.target.checked
+                                ? [...current, key]
+                                : current.filter((item) => item !== key)
+                            );
+                          }}
                         />
-                      ) : (
-                        <div className="flex h-12 w-20 items-center justify-center rounded-md bg-panel text-[10px] text-muted">
-                          N/A
+                        {entry.thumbnail ? (
+                          <img
+                            src={entry.thumbnail}
+                            alt=""
+                            className="h-12 w-20 rounded-md object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-12 w-20 items-center justify-center rounded-md bg-panel text-[10px] text-muted">
+                            N/A
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-ink">
+                            {entry.title}
+                          </p>
+                          <p className="truncate text-xs text-muted">
+                            {[entry.channel, entry.duration_string]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
                         </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-ink">
-                          {entry.title}
-                        </p>
-                        <p className="truncate text-xs text-muted">
-                          {[entry.channel, entry.duration_string]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </p>
-                      </div>
-                    </label>
-                  );
-                })}
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          {job ? (
-            <div
-              className={`mt-5 rounded-2xl p-4 sm:p-5 ${
-                job.status === "completed"
-                  ? "result-shell"
-                  : "border border-line bg-panel/80"
-              } animate-rise-late`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <p
-                  className={`text-xs font-semibold uppercase tracking-[0.14em] ${
-                    job.status === "completed"
-                      ? "text-success"
-                      : job.status === "failed"
-                        ? "text-accent"
-                        : "text-muted"
-                  }`}
-                >
-                  {statusLabel(job.status)}
+            {job ? (
+              <div
+                className={`home-result animate-rise-late ${
+                  job.status === "completed" ? "is-ready" : ""
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p
+                    className={`home-eyebrow ${
+                      job.status === "completed"
+                        ? "text-success"
+                        : job.status === "failed"
+                          ? "text-accent"
+                          : ""
+                    }`}
+                  >
+                    {statusLabel(job.status)}
+                  </p>
+                  {job.status === "queued" || job.status === "processing" ? (
+                    <span className="text-sm font-medium text-ink">
+                      {Math.round(job.progress || 0)}%
+                    </span>
+                  ) : null}
+                </div>
+
+                {(job.status === "queued" || job.status === "processing") && (
+                  <Progress
+                    className="mt-3"
+                    percent={Math.round(job.progress || 0)}
+                    showInfo={false}
+                    strokeColor="#d61f3c"
+                    trailColor="#e4e6eb"
+                  />
+                )}
+
+                <p className="mt-3 truncate text-base font-semibold text-ink">
+                  {job.title || preview?.title || "Preparing download…"}
                 </p>
-                {job.status === "queued" || job.status === "processing" ? (
-                  <span className="text-sm font-medium text-ink">
-                    {Math.round(job.progress || 0)}%
-                  </span>
+
+                {(job.status === "queued" || job.status === "processing") && (
+                  <Button
+                    className="tg-cancel mt-4"
+                    danger
+                    size="large"
+                    loading={cancelling}
+                    onClick={onCancelJob}
+                    block
+                  >
+                    Cancel download
+                  </Button>
+                )}
+
+                {job.status === "cancelled" ? (
+                  <p className="mt-2 text-sm text-muted">
+                    {job.error_message || "Cancelled by user."}
+                  </p>
+                ) : null}
+
+                {job.status === "completed" ? (
+                  <>
+                    <p className="mt-1 truncate text-sm text-muted">
+                      {job.extension?.toUpperCase() || "FILE"}
+                      {job.size ? ` · ${formatBytes(job.size)}` : ""}
+                      {job.trim_end != null
+                        ? ` · clip ${formatTimestamp(job.trim_start || 0)}–${formatTimestamp(job.trim_end)}`
+                        : ""}
+                    </p>
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <Button
+                        className="tg-secondary"
+                        type="default"
+                        size="large"
+                        href={getDownloadFileUrl(job.id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        block
+                      >
+                        Save file
+                      </Button>
+                      <Button
+                        className="tg-secondary"
+                        type="default"
+                        size="large"
+                        loading={sharing}
+                        onClick={() => shareJob(job)}
+                        block
+                      >
+                        {canShare ? "Share" : "Copy link"}
+                      </Button>
+                    </div>
+                  </>
+                ) : null}
+
+                {job.status === "failed" && job.error_message ? (
+                  <p className="mt-2 text-sm text-accent">{job.error_message}</p>
                 ) : null}
               </div>
+            ) : null}
 
-              {(job.status === "queued" || job.status === "processing") && (
+            {batch ? (
+              <div className="home-result animate-rise-late">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="home-eyebrow">
+                    Batch · {statusLabel(batch.status)}
+                  </p>
+                  <span className="text-sm font-medium text-ink">
+                    {batch.completed}/{batch.total}
+                  </span>
+                </div>
+
                 <Progress
                   className="mt-3"
-                  percent={Math.round(job.progress || 0)}
+                  percent={Math.round(batch.progress || 0)}
                   showInfo={false}
                   strokeColor="#d61f3c"
                   trailColor="#e4e6eb"
                 />
-              )}
 
-              <p className="mt-3 truncate text-base font-semibold text-ink">
-                {job.title || preview?.title || "Preparing download…"}
-              </p>
-
-              {(job.status === "queued" || job.status === "processing") && (
-                <Button
-                  className="tg-cancel mt-4"
-                  danger
-                  size="large"
-                  loading={cancelling}
-                  onClick={onCancelJob}
-                  block
-                >
-                  Cancel download
-                </Button>
-              )}
-
-              {job.status === "cancelled" ? (
-                <p className="mt-2 text-sm text-muted">
-                  {job.error_message || "Cancelled by user."}
-                </p>
-              ) : null}
-
-              {job.status === "completed" ? (
-                <>
-                  <p className="mt-1 truncate text-sm text-muted">
-                    {job.extension?.toUpperCase() || "FILE"}
-                    {job.size ? ` · ${formatBytes(job.size)}` : ""}
-                    {job.trim_end != null
-                      ? ` · clip ${formatTimestamp(job.trim_start || 0)}–${formatTimestamp(job.trim_end)}`
-                      : ""}
-                  </p>
-                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Button
-                      className="tg-secondary"
-                      type="default"
-                      size="large"
-                      href={getDownloadFileUrl(job.id)}
-                      target="_blank"
-                      rel="noreferrer"
-                      block
-                    >
-                      Save file
-                    </Button>
-                    <Button
-                      className="tg-secondary"
-                      type="default"
-                      size="large"
-                      loading={sharing}
-                      onClick={() => shareJob(job)}
-                      block
-                    >
-                      {canShare ? "Share" : "Copy link"}
-                    </Button>
-                  </div>
-                </>
-              ) : null}
-
-              {job.status === "failed" && job.error_message ? (
-                <p className="mt-2 text-sm text-accent">{job.error_message}</p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {batch ? (
-            <div className="animate-rise-late mt-5 rounded-2xl border border-line bg-panel/80 p-4 sm:p-5">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">
-                  Batch · {statusLabel(batch.status)}
-                </p>
-                <span className="text-sm font-medium text-ink">
-                  {batch.completed}/{batch.total}
-                </span>
-              </div>
-
-              <Progress
-                className="mt-3"
-                percent={Math.round(batch.progress || 0)}
-                showInfo={false}
-                strokeColor="#d61f3c"
-                trailColor="#e4e6eb"
-              />
-
-              {(batch.status === "queued" || batch.status === "processing") && (
-                <Button
-                  className="tg-cancel mt-4"
-                  danger
-                  size="large"
-                  loading={cancelling}
-                  onClick={onCancelBatch}
-                  block
-                >
-                  Cancel batch
-                </Button>
-              )}
-
-              <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
-                {(batch.jobs || []).map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-xl border border-line bg-white px-3 py-3"
+                {(batch.status === "queued" || batch.status === "processing") && (
+                  <Button
+                    className="tg-cancel mt-4"
+                    danger
+                    size="large"
+                    loading={cancelling}
+                    onClick={onCancelBatch}
+                    block
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-ink">
-                          {item.title || "Video"}
-                        </p>
-                        <p className="mt-1 text-xs text-muted">
-                          {statusLabel(item.status)}
-                          {item.status === "processing" ||
-                          item.status === "queued"
-                            ? ` · ${Math.round(item.progress || 0)}%`
-                            : ""}
-                          {item.status === "completed" && item.size
-                            ? ` · ${formatBytes(item.size)}`
-                            : ""}
-                        </p>
-                      </div>
-                      {item.status === "completed" ? (
-                        <div className="flex shrink-0 gap-3">
-                          <a
-                            className="text-sm font-semibold text-accent hover:underline"
-                            href={getDownloadFileUrl(item.id)}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Save
-                          </a>
-                          <button
-                            type="button"
-                            className="text-sm font-semibold text-ink-soft hover:underline"
-                            onClick={() => shareJob(item)}
-                          >
-                            {canShare ? "Share" : "Copy"}
-                          </button>
+                    Cancel batch
+                  </Button>
+                )}
+
+                <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
+                  {(batch.jobs || []).map((item) => (
+                    <div key={item.id} className="home-batch-item">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-ink">
+                            {item.title || "Video"}
+                          </p>
+                          <p className="mt-1 text-xs text-muted">
+                            {statusLabel(item.status)}
+                            {item.status === "processing" ||
+                            item.status === "queued"
+                              ? ` · ${Math.round(item.progress || 0)}%`
+                              : ""}
+                            {item.status === "completed" && item.size
+                              ? ` · ${formatBytes(item.size)}`
+                              : ""}
+                          </p>
                         </div>
+                        {item.status === "completed" ? (
+                          <div className="flex shrink-0 gap-3">
+                            <a
+                              className="text-sm font-semibold text-accent hover:underline"
+                              href={getDownloadFileUrl(item.id)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Save
+                            </a>
+                            <button
+                              type="button"
+                              className="text-sm font-semibold text-ink-soft hover:underline"
+                              onClick={() => shareJob(item)}
+                            >
+                              {canShare ? "Share" : "Copy"}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                      {(item.status === "queued" ||
+                        item.status === "processing") && (
+                        <Progress
+                          className="mt-2"
+                          percent={Math.round(item.progress || 0)}
+                          size="small"
+                          showInfo={false}
+                          strokeColor="#d61f3c"
+                        />
+                      )}
+                      {item.status === "failed" && item.error_message ? (
+                        <p className="mt-2 text-xs text-accent">
+                          {item.error_message}
+                        </p>
                       ) : null}
                     </div>
-                    {(item.status === "queued" ||
-                      item.status === "processing") && (
-                      <Progress
-                        className="mt-2"
-                        percent={Math.round(item.progress || 0)}
-                        size="small"
-                        showInfo={false}
-                        strokeColor="#d61f3c"
-                      />
-                    )}
-                    {item.status === "failed" && item.error_message ? (
-                      <p className="mt-2 text-xs text-accent">
-                        {item.error_message}
-                      </p>
-                    ) : null}
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          {error && !job && !batch ? (
-            <Alert
-              className="animate-fade mt-5"
-              type="error"
-              showIcon
-              message={error}
-            />
-          ) : null}
+            {error && !job && !batch ? (
+              <Alert
+                className="animate-fade mt-5"
+                type="error"
+                showIcon
+                message={error}
+              />
+            ) : null}
+          </div>
         </div>
       </section>
 
-      <div className="mobile-action-bar sm:hidden">
+      <div className="mobile-action-bar">
         <Button
           className="tg-secondary"
           size="large"
